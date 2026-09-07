@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>aestor</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <div class="bg" aria-hidden="true"></div>
+
+  <section id="login-view" class="view login-view hidden">
+    <form id="login-form" class="login-panel" autocomplete="current-password">
+      <p class="brand">aestor</p>
+      <h1>Sign in</h1>
+      <p class="lede">Password-protected download console.</p>
+      <label class="field">
+        <span>Password</span>
+        <input type="password" id="password" name="password" required autofocus />
+      </label>
+      <p id="login-error" class="error" hidden></p>
+      <button type="submit" class="btn primary">Enter</button>
+    </form>
+  </section>
+
+  <section id="app-view" class="view app-view hidden">
+    <header class="top">
+      <div class="top-brand">
+        <span class="brand">aestor</span>
+        <span id="vpn-pill" class="pill" title="VPN status">…</span>
+        <span id="ntfy-pill" class="pill hidden" title="ntfy">ntfy</span>
+        <span id="live-pill" class="pill warn" title="Live updates">connecting</span>
+      </div>
+      <div class="top-actions">
+        <button type="button" id="ntfy-test-btn" class="btn ghost small hidden">Test ntfy</button>
+        <button type="button" id="logout-btn" class="btn ghost">Log out</button>
+      </div>
+    </header>
+
+    <main class="layout">
+      <section class="panel add-panel">
+        <h2>Add download</h2>
+        <p class="lede">Magnet, torrent file, or direct HTTP(S) link.</p>
+
+        <form id="url-form" class="stack">
+          <label class="field">
+            <span>Magnet or URL</span>
+            <input type="text" id="url-input" placeholder="magnet:?xt=… or https://…" required />
+          </label>
+          <label class="field">
+            <span>Display name <em>(optional)</em></span>
+            <input type="text" id="name-input" placeholder="Leave blank to auto-detect" />
+          </label>
+          <button type="submit" class="btn primary">Start download</button>
+        </form>
+
+        <div class="divider"><span>or</span></div>
+
+        <form id="torrent-form" class="stack">
+          <label class="field file-field">
+            <span>Torrent file</span>
+            <input type="file" id="torrent-input" accept=".torrent,application/x-bittorrent" required />
+          </label>
+          <button type="submit" class="btn secondary">Upload torrent</button>
+        </form>
+        <p id="add-error" class="error" hidden></p>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head">
+          <h2>Active</h2>
+          <button type="button" id="refresh-btn" class="btn ghost small">Refresh</button>
+        </div>
+        <div id="jobs-list" class="list"></div>
+        <p id="jobs-empty" class="empty">No active downloads.</p>
+      </section>
+
+      <section class="panel">
+        <h2>Completed</h2>
+        <p class="lede">Stored as UUID blobs; real names only in the encrypted outer-API list.</p>
+        <div id="files-list" class="list"></div>
+        <p id="files-empty" class="empty">No completed files yet.</p>
+      </section>
+    </main>
+  </section>
+
+  <script src="/app.js"></script>
+</body>
+</html>

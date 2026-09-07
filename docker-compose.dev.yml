@@ -1,0 +1,31 @@
+# Development: backend only, no gluetun. Traffic is not VPN-routed.
+# Usage: docker compose -f docker-compose.dev.yml --env-file .env up --build
+services:
+  backend:
+    build: ./backend
+    container_name: aestor-backend-dev
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      - DEV_MODE=true
+      - WEB_PASSWORD=${WEB_PASSWORD:-dev-password}
+      - SESSION_SECRET=${SESSION_SECRET:-dev-session-secret-change-me}
+      - API_BEARER_TOKEN=${API_BEARER_TOKEN:-dev-api-token-change-me}
+      - ENCRYPTION_PUBLIC_KEY_PATH=${ENCRYPTION_PUBLIC_KEY_PATH:-/keys/public.pem}
+      - DOWNLOAD_DIR=${DOWNLOAD_DIR:-/data/downloads}
+      - COMPLETED_DIR=${COMPLETED_DIR:-/data/completed}
+      - GLUETUN_CONTROL_URL=${GLUETUN_CONTROL_URL:-http://127.0.0.1:8001}
+      - NTFY_ENABLED=${NTFY_ENABLED:-false}
+      - NTFY_SERVER=${NTFY_SERVER:-https://ntfy.sh}
+      - NTFY_TOPIC=${NTFY_TOPIC:-}
+      - NTFY_TOKEN=${NTFY_TOKEN:-}
+      - NTFY_PRIORITY=${NTFY_PRIORITY:-3}
+      - NTFY_EVENTS=${NTFY_EVENTS:-completed,failed,vpn}
+      - HOST=0.0.0.0
+      - PORT=8080
+    volumes:
+      - ./data/downloads:/data/downloads
+      - ./data/completed:/data/completed
+      - ./data/keys/public.pem:/keys/public.pem:ro
+      - ./backend/app:/app/app

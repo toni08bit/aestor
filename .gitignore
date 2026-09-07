@@ -1,0 +1,14 @@
+.env
+data/downloads/*
+data/completed/*
+data/keys/*.pem
+!data/keys/.gitkeep
+gluetun/*
+!gluetun/.gitkeep
+__pycache__/
+*.pyc
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.DS_Store
