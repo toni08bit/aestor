@@ -30,48 +30,22 @@
     <header class="top">
       <div class="top-brand">
         <span class="brand">aestor</span>
-        <span id="vpn-pill" class="pill" title="Network routing">…</span>
         <span id="ntfy-pill" class="pill hidden" title="ntfy">ntfy</span>
-        <span id="live-pill" class="pill warn" title="Live updates">connecting</span>
       </div>
       <div class="top-actions">
+        <button type="button" id="add-open-btn" class="btn primary small">Add download</button>
         <button type="button" id="ntfy-test-btn" class="btn ghost small hidden">Test ntfy</button>
         <button type="button" id="logout-btn" class="btn ghost">Log out</button>
       </div>
     </header>
 
     <main class="layout">
-      <section class="panel add-panel">
-        <h2>Add download</h2>
-        <p class="lede">Magnet, torrent file, or direct HTTP(S) link.</p>
-
-        <form id="url-form" class="stack">
-          <label class="field">
-            <span>Magnet or URL</span>
-            <input type="text" id="url-input" placeholder="magnet:?xt=… or https://…" required />
-          </label>
-          <label class="field">
-            <span>Display name <em>(optional)</em></span>
-            <input type="text" id="name-input" placeholder="Leave blank to auto-detect" />
-          </label>
-          <button type="submit" class="btn primary">Start download</button>
-        </form>
-
-        <div class="divider"><span>or</span></div>
-
-        <form id="torrent-form" class="stack">
-          <label class="field file-field">
-            <span>Torrent file</span>
-            <input type="file" id="torrent-input" accept=".torrent,application/x-bittorrent" required />
-          </label>
-          <button type="submit" class="btn secondary">Upload torrent</button>
-        </form>
-        <p id="add-error" class="error" hidden></p>
-      </section>
-
-      <section class="panel">
+      <section class="panel panel-primary">
         <div class="panel-head">
-          <h2>Active</h2>
+          <div>
+            <h2>Active</h2>
+            <p class="lede tight">Live progress and transfer detail.</p>
+          </div>
           <button type="button" id="refresh-btn" class="btn ghost small">Refresh</button>
         </div>
         <div id="jobs-list" class="list"></div>
@@ -79,13 +53,68 @@
       </section>
 
       <section class="panel">
-        <h2>Completed</h2>
-        <p class="lede">Stored as UUID blobs; real names only in the encrypted outer-API list.</p>
+        <div class="panel-head">
+          <div>
+            <h2>Completed</h2>
+            <p class="lede tight">UUID blobs; names only in the encrypted outer-API list.</p>
+          </div>
+        </div>
         <div id="files-list" class="list"></div>
         <p id="files-empty" class="empty">No completed files yet.</p>
       </section>
     </main>
+
+    <footer class="status-bar" aria-label="Connection status">
+      <div class="status-group">
+        <span class="status-label">route</span>
+        <span id="route-value" class="status-value">…</span>
+      </div>
+      <div class="status-group">
+        <span class="status-label">egress</span>
+        <span id="egress-value" class="status-value mono">…</span>
+      </div>
+      <div class="status-group status-live">
+        <span class="status-dot" id="live-dot" aria-hidden="true"></span>
+        <span id="live-value" class="status-value">connecting</span>
+      </div>
+    </footer>
   </section>
+
+  <div id="add-dialog" class="dialog hidden" role="dialog" aria-modal="true" aria-labelledby="add-dialog-title">
+    <button type="button" class="dialog-backdrop" id="add-backdrop" aria-label="Close"></button>
+    <div class="dialog-panel">
+      <div class="dialog-head">
+        <div>
+          <h2 id="add-dialog-title">Add download</h2>
+          <p class="lede tight">Magnet, torrent file, or direct HTTP(S) link.</p>
+        </div>
+        <button type="button" id="add-close-btn" class="btn ghost small" aria-label="Close">Close</button>
+      </div>
+
+      <form id="url-form" class="stack">
+        <label class="field">
+          <span>Magnet or URL</span>
+          <input type="text" id="url-input" placeholder="magnet:?xt=… or https://…" required />
+        </label>
+        <label class="field">
+          <span>Display name <em>(optional)</em></span>
+          <input type="text" id="name-input" placeholder="Leave blank to auto-detect" />
+        </label>
+        <button type="submit" class="btn primary">Start download</button>
+      </form>
+
+      <div class="divider"><span>or</span></div>
+
+      <form id="torrent-form" class="stack">
+        <label class="field file-field">
+          <span>Torrent file</span>
+          <input type="file" id="torrent-input" accept=".torrent,application/x-bittorrent" required />
+        </label>
+        <button type="submit" class="btn secondary">Upload torrent</button>
+      </form>
+      <p id="add-error" class="error" hidden></p>
+    </div>
+  </div>
 
   <script src="/app.js"></script>
 </body>

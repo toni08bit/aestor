@@ -9,12 +9,19 @@ const jobsList = document.getElementById("jobs-list");
 const jobsEmpty = document.getElementById("jobs-empty");
 const filesList = document.getElementById("files-list");
 const filesEmpty = document.getElementById("files-empty");
-const vpnPill = document.getElementById("vpn-pill");
 const ntfyPill = document.getElementById("ntfy-pill");
-const livePill = document.getElementById("live-pill");
+const routeValue = document.getElementById("route-value");
+const egressValue = document.getElementById("egress-value");
+const liveValue = document.getElementById("live-value");
+const liveDot = document.getElementById("live-dot");
 const ntfyTestBtn = document.getElementById("ntfy-test-btn");
 const logoutBtn = document.getElementById("logout-btn");
 const refreshBtn = document.getElementById("refresh-btn");
+const addOpenBtn = document.getElementById("add-open-btn");
+const addCloseBtn = document.getElementById("add-close-btn");
+const addBackdrop = document.getElementById("add-backdrop");
+const addDialog = document.getElementById("add-dialog");
+const urlInput = document.getElementById("url-input");
 
 let pollTimer = null;
 let socket = null;
@@ -71,6 +78,7 @@ async function api(path, options = {}) {
 }
 
 function enterLogin() {
+  closeAddDialog();
   stopLive();
   hide(appView);
   show(loginView);
@@ -82,6 +90,27 @@ function enterApp() {
   refreshAll();
   startLive();
 }
+
+function openAddDialog() {
+  setError(addError, "");
+  show(addDialog);
+  requestAnimationFrame(() => urlInput.focus());
+}
+
+function closeAddDialog() {
+  hide(addDialog);
+  setError(addError, "");
+}
+
+addOpenBtn.addEventListener("click", openAddDialog);
+addCloseBtn.addEventListener("click", closeAddDialog);
+addBackdrop.addEventListener("click", closeAddDialog);
+
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && !addDialog.classList.contains("hidden")) {
+    closeAddDialog();
+  }
+});
 
 function formatBytes(n) {
   if (n == null || Number.isNaN(n)) return "—";
@@ -172,6 +201,7 @@ urlForm.addEventListener("submit", async (e) => {
       body: JSON.stringify({ url, name: name || null }),
     });
     urlForm.reset();
+    closeAddDialog();
     requestLiveRefresh();
   } catch (err) {
     setError(addError, err.message || "Failed to add");
@@ -198,6 +228,7 @@ torrentForm.addEventListener("submit", async (e) => {
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(data.detail || res.statusText);
     torrentForm.reset();
+    closeAddDialog();
     requestLiveRefresh();
   } catch (err) {
     setError(addError, err.message || "Upload failed");
@@ -231,14 +262,23 @@ async function refreshAll() {
   }
 }
 
+function setLiveState(label, tone) {
+  liveValue.textContent = label;
+  liveValue.className = `status-value ${tone}`;
+  liveDot.className = `status-dot ${tone}`;
+}
+
 function renderStatus(status) {
   if (status.dev_mode) {
-    vpnPill.textContent = "dev · no vpn";
-    vpnPill.className = "pill warn";
+    routeValue.textContent = "dev · clearnet";
+    routeValue.className = "status-value warn";
   } else {
-    vpnPill.textContent = "gluetun";
-    vpnPill.className = "pill ok";
+    routeValue.textContent = "gluetun";
+    routeValue.className = "status-value ok";
   }
+
+  egressValue.textContent = status.public_ip || "—";
+  egressValue.title = status.public_ip ? "Current egress public IP" : "Public IP not yet known";
 
   if (status.ntfy_enabled) {
     ntfyPill.textContent = "ntfy on";
@@ -829,8 +869,7 @@ function connectSocket() {
 
   socket.addEventListener("open", () => {
     stopPollingFallback();
-    livePill.textContent = "live";
-    livePill.className = "pill ok";
+    setLiveState("live", "ok");
   });
 
   socket.addEventListener("message", (ev) => {
@@ -846,8 +885,7 @@ function connectSocket() {
 
   socket.addEventListener("close", (ev) => {
     socket = null;
-    livePill.textContent = "reconnecting";
-    livePill.className = "pill warn";
+    setLiveState("reconnecting", "warn");
     if (ev.code === 4401) {
       enterLogin();
       return;
@@ -863,8 +901,7 @@ function connectSocket() {
 
 function startPollingFallback() {
   stopPollingFallback();
-  livePill.textContent = "polling";
-  livePill.className = "pill warn";
+  setLiveState("polling", "warn");
   pollTimer = setInterval(refreshAll, 2000);
 }
 

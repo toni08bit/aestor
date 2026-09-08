@@ -110,6 +110,7 @@ class LoginRequest(BaseModel):
 
 class StatusResponse(BaseModel):
     dev_mode: bool
+    public_ip: Optional[str] = None
     active_jobs: int
     completed_files: int
     ntfy_enabled: bool = False

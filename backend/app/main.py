@@ -23,6 +23,7 @@ from app.auth import (
 from app.config import Settings, get_settings
 from app.models import CompletedIdInfo, JobCreate, JobInfo, LoginRequest, StatusResponse
 from app.services.download_manager import DownloadManager
+from app.services.egress import EgressInfo
 from app.services.encryption import Encryptor
 from app.services.live import LiveHub
 from app.services.ntfy import NtfyNotifier
@@ -42,6 +43,7 @@ class AppState:
     settings: Settings
     store: Store
     manager: DownloadManager
+    egress: EgressInfo
     ntfy: NtfyNotifier
     live: LiveHub
 
@@ -59,6 +61,7 @@ def build_live_snapshot() -> dict[str, Any]:
     )
     status = StatusResponse(
         dev_mode=settings.dev_mode,
+        public_ip=state.egress.public_ip,
         active_jobs=active,
         completed_files=store.completed_count(),
         ntfy_enabled=state.ntfy.enabled,
@@ -125,6 +128,7 @@ async def lifespan(app: FastAPI):
 
     encryptor = Encryptor(settings.encryption_public_key_path)
     store = Store(settings.completed_dir, encryptor)
+    egress = EgressInfo()
     ntfy = NtfyNotifier(settings)
     live = LiveHub()
     manager = DownloadManager(settings, store, encryptor, ntfy)
@@ -132,22 +136,26 @@ async def lifespan(app: FastAPI):
     state.settings = settings
     state.store = store
     state.manager = manager
+    state.egress = egress
     state.ntfy = ntfy
     state.live = live
 
+    await egress.start()
     await manager.start()
     await live.start(build_live_snapshot, interval=settings.live_push_interval)
     log.info(
-        "aestor started (dev_mode=%s ntfy=%s live=%.2fs)",
+        "aestor started (dev_mode=%s ntfy=%s live=%.2fs egress=%s)",
         settings.dev_mode,
         ntfy.enabled,
         settings.live_push_interval,
+        egress.public_ip or "unknown",
     )
     try:
         yield
     finally:
         await live.stop()
         await manager.stop()
+        await egress.stop()
         log.info("aestor stopped")
 
 
@@ -243,6 +251,7 @@ async def status_endpoint(
     )
     return StatusResponse(
         dev_mode=settings.dev_mode,
+        public_ip=state.egress.public_ip,
         active_jobs=active,
         completed_files=store.completed_count(),
         ntfy_enabled=state.ntfy.enabled,
