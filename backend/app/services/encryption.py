@@ -34,6 +34,7 @@ import base64
 import json
 import os
 import struct
+import time
 from pathlib import Path
 from typing import Any, Callable, Optional
 
@@ -124,6 +125,10 @@ class Encryptor:
                 index += 1
                 if on_progress is not None:
                     on_progress(done, total)
+                # Yield so the asyncio LiveHub thread can push WS snapshots during
+                # long encrypts (tight read/encrypt/write otherwise starves it).
+                if index % 2 == 0:
+                    time.sleep(0.001)
 
         if on_progress is not None and total == 0:
             on_progress(0, 0)

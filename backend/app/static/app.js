@@ -752,7 +752,8 @@ function patchJobCard(card, job) {
   f("name").textContent = job.name;
 
   const statusPill = f("status-pill");
-  statusPill.textContent = job.status.replaceAll("_", " ");
+  const packing = job.status === "encrypting" && job.state === "packing";
+  statusPill.textContent = packing ? "packing" : job.status.replaceAll("_", " ");
   statusPill.className = `pill ${statusClass(job.status)}`;
 
   const sizeLabel =
@@ -762,7 +763,10 @@ function patchJobCard(card, job) {
 
   let chips;
   if (job.status === "encrypting") {
-    chips = [chip("Σ", sizeLabel, "Encryption progress")];
+    chips = [
+      chip("Σ", sizeLabel, packing ? "Packing progress" : "Encryption progress"),
+      chip("↓", formatRate(job.download_rate), packing ? "Pack speed" : "Encrypt speed"),
+    ];
   } else {
     chips = [
       chip("↓", formatRate(job.download_rate), "Download speed"),

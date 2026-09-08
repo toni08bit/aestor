@@ -15,7 +15,7 @@ import httpx
 
 from app.config import Settings
 from app.models import JobKind, JobStatus, PeerInfo, new_id, utcnow
-from app.services.encryption import Encryptor
+from app.services.encryption import Encryptor, ProgressCb
 from app.services.geoip import country_code_for_ip
 from app.services.ntfy import NtfyNotifier
 from app.services.store import JobRecord, Store
@@ -577,7 +577,34 @@ class DownloadManager:
                 bundle = content_path
                 if content_path.is_dir():
                     zip_path = job.work_dir / f"{Path(content_name).name}.zip"
-                    await asyncio.to_thread(self._zip_dir, content_path, zip_path)
+                    job.state = "packing"
+                    job.progress = 0.0
+                    job.downloaded_bytes = 0
+                    job.download_rate = 0.0
+                    job.touch()
+
+                    zip_last_t = time.monotonic()
+                    zip_last_bytes = 0
+
+                    def on_zip_progress(done: int, total: int) -> None:
+                        nonlocal zip_last_t, zip_last_bytes
+                        job.downloaded_bytes = done
+                        if total > 0:
+                            job.total_bytes = total
+                            job.progress = min(1.0, done / total)
+                        else:
+                            job.progress = 1.0
+                        now = time.monotonic()
+                        dt = now - zip_last_t
+                        if dt >= 0.25:
+                            job.download_rate = (done - zip_last_bytes) / dt
+                            zip_last_t = now
+                            zip_last_bytes = done
+                        job.touch()
+
+                    await asyncio.to_thread(
+                        self._zip_dir, content_path, zip_path, on_zip_progress
+                    )
                     bundle = zip_path
                     job.name = zip_path.name
 
@@ -593,17 +620,35 @@ class DownloadManager:
                 self._fail_job(job, str(exc))
 
     @staticmethod
-    def _zip_dir(src: Path, dest: Path) -> None:
+    def _zip_dir(
+        src: Path,
+        dest: Path,
+        on_progress: Optional[ProgressCb] = None,
+    ) -> None:
+        if src.is_file():
+            files = [src]
+            total = src.stat().st_size
+        else:
+            files = [p for p in src.rglob("*") if p.is_file()]
+            total = sum(p.stat().st_size for p in files)
+
+        done = 0
+        if on_progress is not None:
+            on_progress(0, total)
+
         with zipfile.ZipFile(dest, "w", compression=zipfile.ZIP_DEFLATED) as zf:
-            if src.is_file():
-                zf.write(src, arcname=src.name)
-                return
-            for path in src.rglob("*"):
-                if path.is_file():
-                    zf.write(path, arcname=str(path.relative_to(src)))
+            for path in files:
+                arcname = path.name if src.is_file() else str(path.relative_to(src))
+                zf.write(path, arcname=arcname)
+                done += path.stat().st_size
+                if on_progress is not None:
+                    on_progress(done, total)
+                # Let the live WS loop breathe during large packs.
+                time.sleep(0)
 
     async def _finalize_path(self, job: JobRecord, path: Path) -> None:
         job.status = JobStatus.ENCRYPTING
+        job.state = "encrypting"
         job.progress = 0.0
         job.download_rate = 0.0
         job.upload_rate = 0.0
@@ -615,13 +660,23 @@ class DownloadManager:
             job.downloaded_bytes = 0
         job.touch()
 
+        last_t = time.monotonic()
+        last_bytes = 0
+
         def on_progress(done: int, total: int) -> None:
+            nonlocal last_t, last_bytes
             job.downloaded_bytes = done
             if total > 0:
                 job.total_bytes = total
                 job.progress = min(1.0, done / total)
             else:
                 job.progress = 1.0
+            now = time.monotonic()
+            dt = now - last_t
+            if dt >= 0.25:
+                job.download_rate = (done - last_bytes) / dt
+                last_t = now
+                last_bytes = done
             job.touch()
 
         await asyncio.to_thread(

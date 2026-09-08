@@ -231,7 +231,13 @@ class Store:
     ) -> Path:
         """Encrypt blob as {uuid}, append encrypted manifest line. Returns blob path."""
         dest = self.blob_path(file_id)
-        self.encryptor.encrypt_file(source_path, dest, on_progress=on_progress)
+        tmp = Path(f"{dest}.tmp")
+        try:
+            self.encryptor.encrypt_file(source_path, tmp, on_progress=on_progress)
+            tmp.replace(dest)
+        except Exception:
+            tmp.unlink(missing_ok=True)
+            raise
 
         b64 = self.encryptor.encrypt_manifest_payload(
             {

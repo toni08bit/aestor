@@ -79,7 +79,9 @@ class LiveHub:
     async def broadcast(self) -> None:
         if not self._get_snapshot:
             return
-        payload = self._get_snapshot()
+        # Build off the event loop so dir scans / pydantic dumps do not stall WS I/O
+        # while encrypt/zip workers are also busy.
+        payload = await asyncio.to_thread(self._get_snapshot)
         async with self._lock:
             clients = list(self._clients)
         stale: list[WebSocket] = []
@@ -98,7 +100,8 @@ class LiveHub:
         if not self._get_snapshot:
             return
         try:
-            await ws.send_json(self._get_snapshot())
+            payload = await asyncio.to_thread(self._get_snapshot)
+            await ws.send_json(payload)
         except Exception:
             await self.disconnect(ws)
 
