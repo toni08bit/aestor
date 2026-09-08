@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from typing import Optional
 
 import httpx
@@ -58,9 +59,15 @@ class EgressInfo:
                     resp = await client.get(url)
                     resp.raise_for_status()
                     ip = resp.text.strip().split()[0]
-                    if ip and ip != self._ip:
+                    if not ip:
+                        continue
+                    if self._ip and ip != self._ip:
+                        # Last resort: egress changed. Die hard — no recovery path.
+                        log.error("egress IP changed %s → %s — exiting", self._ip, ip)
+                        os._exit(1)
+                    if ip != self._ip:
                         log.info("egress public ip: %s", ip)
-                    self._ip = ip or None
+                    self._ip = ip
                     return self._ip
                 except Exception as exc:
                     log.debug("egress lookup via %s failed: %s", url, exc)
