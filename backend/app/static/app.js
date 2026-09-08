@@ -22,11 +22,19 @@ const addCloseBtn = document.getElementById("add-close-btn");
 const addBackdrop = document.getElementById("add-backdrop");
 const addDialog = document.getElementById("add-dialog");
 const urlInput = document.getElementById("url-input");
+const confirmDialog = document.getElementById("confirm-dialog");
+const confirmBackdrop = document.getElementById("confirm-backdrop");
+const confirmCancelBtn = document.getElementById("confirm-cancel-btn");
+const confirmOkBtn = document.getElementById("confirm-ok-btn");
+const confirmFileId = document.getElementById("confirm-file-id");
+const confirmError = document.getElementById("confirm-error");
 
 let pollTimer = null;
 let socket = null;
 let socketRetry = null;
 let useWebsocket = true;
+let pendingDeleteId = null;
+let deleteInFlight = false;
 const expandedJobs = new Set();
 const cardEls = new Map(); // id → root element (preserve expand + canvas across polls)
 
@@ -79,6 +87,7 @@ async function api(path, options = {}) {
 
 function enterLogin() {
   closeAddDialog();
+  closeConfirmDialog();
   stopLive();
   hide(appView);
   show(loginView);
@@ -102,12 +111,60 @@ function closeAddDialog() {
   setError(addError, "");
 }
 
+function openConfirmDelete(fileId) {
+  pendingDeleteId = fileId;
+  deleteInFlight = false;
+  confirmFileId.textContent = fileId;
+  confirmOkBtn.disabled = false;
+  confirmOkBtn.textContent = "Delete";
+  setError(confirmError, "");
+  show(confirmDialog);
+  requestAnimationFrame(() => confirmCancelBtn.focus());
+}
+
+function closeConfirmDialog() {
+  if (deleteInFlight) return;
+  hide(confirmDialog);
+  pendingDeleteId = null;
+  setError(confirmError, "");
+  confirmOkBtn.disabled = false;
+  confirmOkBtn.textContent = "Delete";
+}
+
+async function confirmDeleteFile() {
+  if (!pendingDeleteId || deleteInFlight) return;
+  const fileId = pendingDeleteId;
+  deleteInFlight = true;
+  confirmOkBtn.disabled = true;
+  confirmOkBtn.textContent = "Deleting…";
+  setError(confirmError, "");
+  try {
+    await api(`/api/files/${encodeURIComponent(fileId)}`, { method: "DELETE" });
+    deleteInFlight = false;
+    closeConfirmDialog();
+    requestLiveRefresh();
+  } catch (err) {
+    deleteInFlight = false;
+    confirmOkBtn.disabled = false;
+    confirmOkBtn.textContent = "Delete";
+    setError(confirmError, err.message);
+  }
+}
+
 addOpenBtn.addEventListener("click", openAddDialog);
 addCloseBtn.addEventListener("click", closeAddDialog);
 addBackdrop.addEventListener("click", closeAddDialog);
+confirmBackdrop.addEventListener("click", closeConfirmDialog);
+confirmCancelBtn.addEventListener("click", closeConfirmDialog);
+confirmOkBtn.addEventListener("click", confirmDeleteFile);
 
 document.addEventListener("keydown", (e) => {
-  if (e.key === "Escape" && !addDialog.classList.contains("hidden")) {
+  if (e.key !== "Escape") return;
+  if (!confirmDialog.classList.contains("hidden")) {
+    closeConfirmDialog();
+    return;
+  }
+  if (!addDialog.classList.contains("hidden")) {
     closeAddDialog();
   }
 });
@@ -819,8 +876,11 @@ function renderFiles(files) {
       </div>
       <div class="row-actions">
         <span class="pill">encrypted</span>
+        <button type="button" class="btn danger small" data-delete-file="${escapeHtml(file.id)}">Delete</button>
       </div>
     `;
+    const delBtn = row.querySelector("[data-delete-file]");
+    delBtn.addEventListener("click", () => openConfirmDelete(file.id));
     filesList.appendChild(row);
   }
 }

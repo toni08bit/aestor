@@ -116,6 +116,24 @@
     </div>
   </div>
 
+  <div id="confirm-dialog" class="dialog hidden" role="dialog" aria-modal="true" aria-labelledby="confirm-dialog-title">
+    <button type="button" class="dialog-backdrop" id="confirm-backdrop" aria-label="Cancel"></button>
+    <div class="dialog-panel dialog-panel-narrow">
+      <div class="dialog-head">
+        <div>
+          <h2 id="confirm-dialog-title">Delete encrypted file?</h2>
+          <p id="confirm-dialog-body" class="lede tight">This permanently wipes the blob and removes it from the manifest.</p>
+        </div>
+      </div>
+      <p id="confirm-file-id" class="confirm-id mono"></p>
+      <p id="confirm-error" class="error hidden"></p>
+      <div class="dialog-actions">
+        <button type="button" id="confirm-cancel-btn" class="btn ghost">Cancel</button>
+        <button type="button" id="confirm-ok-btn" class="btn danger">Delete</button>
+      </div>
+    </div>
+  </div>
+
   <script src="/app.js"></script>
 </body>
 </html>

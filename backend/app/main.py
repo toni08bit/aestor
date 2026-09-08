@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -348,6 +349,20 @@ async def list_completed_web(
     store: Annotated[Store, Depends(get_store)],
 ):
     return store.list_file_ids()
+
+
+@app.delete("/api/files/{file_id}")
+async def delete_completed_web(
+    file_id: str,
+    _: Annotated[None, Depends(require_web_session)],
+    store: Annotated[Store, Depends(get_store)],
+):
+    """Securely wipe an encrypted blob from the web UI."""
+    ok = await asyncio.to_thread(store.delete_completed, file_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="File not found")
+    state.live.mark_dirty()
+    return {"ok": True}
 
 
 @app.post("/api/ntfy/test")

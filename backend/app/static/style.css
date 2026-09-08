@@ -406,6 +406,37 @@ body {
   letter-spacing: -0.03em;
 }
 
+.dialog-panel-narrow {
+  width: min(100%, 420px);
+}
+
+.dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.55rem;
+  margin-top: 0.25rem;
+}
+
+.confirm-id {
+  margin: 0;
+  padding: 0.65rem 0.75rem;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.25);
+  color: var(--text);
+  font-size: 0.82rem;
+  word-break: break-all;
+}
+
+.btn.danger:hover {
+  background: rgba(224, 112, 112, 0.12);
+}
+
+.btn.danger:disabled {
+  opacity: 0.55;
+  cursor: wait;
+}
+
 @keyframes dialog-in {
   from {
     opacity: 0;
