@@ -17,7 +17,7 @@ services:
       - NTFY_TOPIC=${NTFY_TOPIC:-}
       - NTFY_TOKEN=${NTFY_TOKEN:-}
       - NTFY_PRIORITY=${NTFY_PRIORITY:-3}
-      - NTFY_EVENTS=${NTFY_EVENTS:-completed,failed,vpn}
+      - NTFY_EVENTS=${NTFY_EVENTS:-completed,failed}
     volumes:
       - ./data/downloads:/data/downloads
       - ./data/completed:/data/completed

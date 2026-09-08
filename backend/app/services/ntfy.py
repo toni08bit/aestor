@@ -88,21 +88,3 @@ class NtfyNotifier:
             tags="x,warning",
             priority=4,
         )
-
-    async def vpn(self, *, ok: bool, detail: str = "") -> None:
-        if ok:
-            await self.send(
-                event="vpn",
-                title="aestor · VPN restored",
-                message=detail or "Tunnel is up; transfers resumed.",
-                tags="unlock,green_circle",
-                priority=3,
-            )
-        else:
-            await self.send(
-                event="vpn",
-                title="aestor · VPN down",
-                message=detail or "Tunnel lost; transfers paused.",
-                tags="lock,red_circle",
-                priority=5,
-            )

@@ -235,12 +235,9 @@ function renderStatus(status) {
   if (status.dev_mode) {
     vpnPill.textContent = "dev · no vpn";
     vpnPill.className = "pill warn";
-  } else if (status.vpn_ok) {
-    vpnPill.textContent = "vpn up";
-    vpnPill.className = "pill ok";
   } else {
-    vpnPill.textContent = "vpn down";
-    vpnPill.className = "pill danger";
+    vpnPill.textContent = "gluetun";
+    vpnPill.className = "pill ok";
   }
 
   if (status.ntfy_enabled) {
@@ -268,7 +265,7 @@ ntfyTestBtn.addEventListener("click", async () => {
 
 function statusClass(status) {
   if (status === "downloading" || status === "encrypting") return "ok";
-  if (status === "paused" || status === "paused_vpn" || status === "queued") return "warn";
+  if (status === "paused" || status === "queued") return "warn";
   if (status === "failed") return "danger";
   return "";
 }
@@ -511,7 +508,7 @@ function drawSpeedGraph(canvas, history) {
 
 function renderJobs(jobs) {
   const active = jobs.filter((j) =>
-    ["queued", "downloading", "paused", "paused_vpn", "encrypting"].includes(j.status)
+    ["queued", "downloading", "paused", "encrypting"].includes(j.status)
   );
   const recent = jobs.filter((j) => ["failed"].includes(j.status)).slice(0, 8);
   const showList = [...active, ...recent];
@@ -648,8 +645,8 @@ function syncActionButton(container, key, visible, label, className, onClick) {
 function patchJobCard(card, job) {
   card._job = job;
   const expanded = expandedJobs.has(job.id);
-  const canCancel = ["queued", "downloading", "paused", "paused_vpn"].includes(job.status);
-  const canPause = ["queued", "downloading", "paused_vpn"].includes(job.status);
+  const canCancel = ["queued", "downloading", "paused"].includes(job.status);
+  const canPause = ["queued", "downloading"].includes(job.status);
   const canResume = job.status === "paused";
   card.classList.toggle("expanded", expanded);
 

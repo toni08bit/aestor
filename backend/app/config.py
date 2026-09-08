@@ -15,15 +15,12 @@ class Settings(BaseSettings):
     download_dir: Path = Path("/data/downloads")
     completed_dir: Path = Path("/data/completed")
 
-    # When true, skip VPN health gating (local / docker-compose.dev.yml)
+    # True in docker-compose.dev.yml (no gluetun). Production routes via gluetun.
     dev_mode: bool = False
-    gluetun_control_url: str = "http://127.0.0.1:8001"
 
     host: str = "0.0.0.0"
     port: int = 8080
 
-    # How often to poll gluetun / torrent progress (seconds)
-    vpn_poll_interval: float = 5.0
     torrent_poll_interval: float = 0.5
     # WebSocket UI push interval
     live_push_interval: float = 0.35
@@ -39,8 +36,8 @@ class Settings(BaseSettings):
     ntfy_topic: str = ""
     ntfy_token: str = ""
     ntfy_priority: int = 3
-    # Comma-separated: completed,failed,vpn,all
-    ntfy_events: str = "completed,failed,vpn"
+    # Comma-separated: completed,failed,all
+    ntfy_events: str = "completed,failed"
 
 
 @lru_cache

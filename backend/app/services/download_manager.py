@@ -1,4 +1,4 @@
-"""Download orchestration: libtorrent + HTTP, VPN-gated, encrypt-on-complete."""
+"""Download orchestration: libtorrent + HTTP, encrypt-on-complete."""
 
 from __future__ import annotations
 
@@ -19,7 +19,6 @@ from app.services.encryption import Encryptor
 from app.services.geoip import country_code_for_ip
 from app.services.ntfy import NtfyNotifier
 from app.services.store import JobRecord, Store
-from app.services.vpn_guard import VpnGuard
 
 log = logging.getLogger(__name__)
 
@@ -131,7 +130,6 @@ class DownloadManager:
         self,
         settings: Settings,
         store: Store,
-        vpn: VpnGuard,
         encryptor: Encryptor,
         ntfy: Optional[NtfyNotifier] = None,
     ) -> None:
@@ -139,7 +137,6 @@ class DownloadManager:
             raise RuntimeError("libtorrent is not installed")
         self.settings = settings
         self.store = store
-        self.vpn = vpn
         self.encryptor = encryptor
         self.ntfy = ntfy or NtfyNotifier(settings)
 
@@ -147,7 +144,6 @@ class DownloadManager:
         self._handles: dict[str, object] = {}
         self._http_tasks: dict[str, asyncio.Task] = {}
         self._poll_task: Optional[asyncio.Task] = None
-        self._paused_for_vpn = False
         self._lock = asyncio.Lock()
 
     def _notify(self, coro) -> None:
@@ -190,10 +186,6 @@ class DownloadManager:
         self.settings.download_dir.mkdir(parents=True, exist_ok=True)
         self.settings.completed_dir.mkdir(parents=True, exist_ok=True)
 
-        self.vpn.on_change(self._on_vpn_change)
-        if not self.vpn.ok:
-            self._pause_all_transfers()
-
         self._poll_task = asyncio.create_task(self._poll_loop(), name="torrent-poll")
 
     async def stop(self) -> None:
@@ -213,57 +205,9 @@ class DownloadManager:
                     pass
             self._session = None
 
-    async def _on_vpn_change(self, ok: bool) -> None:
-        if ok:
-            log.info("VPN restored — resuming transfers")
-            self._resume_all_transfers()
-            self._notify(self.ntfy.vpn(ok=True))
-        else:
-            log.warning("VPN down — pausing all transfers")
-            self._pause_all_transfers()
-            self._notify(self.ntfy.vpn(ok=False))
-
-    def _pause_all_transfers(self) -> None:
-        self._paused_for_vpn = True
-        for job_id, handle in self._handles.items():
-            job = self.store.get_job(job_id)
-            if job and job.user_paused:
-                continue
-            try:
-                handle.pause()
-            except Exception:
-                pass
-        for job in self.store.jobs.values():
-            if job.status == JobStatus.DOWNLOADING and not job.user_paused:
-                job.status = JobStatus.PAUSED_VPN
-                job.touch()
-
-    def _resume_all_transfers(self) -> None:
-        self._paused_for_vpn = False
-        if not self.vpn.ok:
-            return
-        for job_id, handle in self._handles.items():
-            job = self.store.get_job(job_id)
-            if job and job.user_paused:
-                continue
-            try:
-                handle.resume()
-            except Exception:
-                pass
-        for job in self.store.jobs.values():
-            if job.status == JobStatus.PAUSED_VPN and not job.user_paused:
-                if job.kind == JobKind.HTTP:
-                    job.status = JobStatus.DOWNLOADING
-                else:
-                    job.status = JobStatus.DOWNLOADING
-                job.touch()
-
     def _ensure_can_start(self) -> None:
         if self._session is None:
             raise RuntimeError("session not started")
-        # DEV_MODE keeps vpn.ok=True; otherwise refuse unless the tunnel is confirmed.
-        if not self.vpn.ok:
-            raise RuntimeError("VPN is down; refusing new downloads")
 
     def add_url(self, url: str, name: Optional[str] = None) -> JobRecord:
         url = url.strip()
@@ -294,12 +238,8 @@ class DownloadManager:
         atp.ti = info
         atp.save_path = str(work)
         handle = self._session.add_torrent(atp)
-        if self._paused_for_vpn:
-            handle.pause()
-            job.status = JobStatus.PAUSED_VPN
-        else:
-            handle.resume()
-            job.status = JobStatus.DOWNLOADING
+        handle.resume()
+        job.status = JobStatus.DOWNLOADING
         self._handles[job.id] = handle
         job.touch()
         return job
@@ -325,12 +265,8 @@ class DownloadManager:
 
         params.save_path = str(work)
         handle = self._session.add_torrent(params)
-        if self._paused_for_vpn:
-            handle.pause()
-            job.status = JobStatus.PAUSED_VPN
-        else:
-            handle.resume()
-            job.status = JobStatus.DOWNLOADING
+        handle.resume()
+        job.status = JobStatus.DOWNLOADING
         self._handles[job.id] = handle
         job.touch()
         return job
@@ -367,7 +303,7 @@ class DownloadManager:
         work.mkdir(parents=True, exist_ok=True)
         job.work_dir = work
         self.store.add_job(job)
-        job.status = JobStatus.DOWNLOADING if self.vpn.ok else JobStatus.PAUSED_VPN
+        job.status = JobStatus.DOWNLOADING
         job.touch()
         self._http_tasks[job.id] = asyncio.create_task(
             self._http_download(job, url),
@@ -377,11 +313,6 @@ class DownloadManager:
 
     async def _fetch_torrent_then_add(self, job: JobRecord, url: str) -> None:
         try:
-            while not self.vpn.ok:
-                job.status = JobStatus.PAUSED_VPN
-                job.touch()
-                await asyncio.sleep(2)
-
             async with httpx.AsyncClient(follow_redirects=True, timeout=120.0) as client:
                 resp = await client.get(url)
                 resp.raise_for_status()
@@ -401,12 +332,8 @@ class DownloadManager:
             atp.ti = info
             atp.save_path = str(job.work_dir)
             handle = self._session.add_torrent(atp)
-            if not self.vpn.ok:
-                handle.pause()
-                job.status = JobStatus.PAUSED_VPN
-            else:
-                handle.resume()
-                job.status = JobStatus.DOWNLOADING
+            handle.resume()
+            job.status = JobStatus.DOWNLOADING
             self._handles[job.id] = handle
             job.touch()
         except asyncio.CancelledError:
@@ -429,12 +356,6 @@ class DownloadManager:
                     job.download_rate = 0.0
                     job.touch()
                     await asyncio.sleep(0.5)
-                    continue
-
-                if not self.vpn.ok:
-                    job.status = JobStatus.PAUSED_VPN
-                    job.touch()
-                    await asyncio.sleep(2)
                     continue
 
                 job.status = JobStatus.DOWNLOADING
@@ -461,8 +382,6 @@ class DownloadManager:
                                 async for chunk in resp.aiter_bytes(1024 * 256):
                                     if job.user_paused:
                                         raise _UserPaused()
-                                    if not self.vpn.ok:
-                                        raise ConnectionError("VPN dropped during HTTP download")
                                     out.write(chunk)
                                     downloaded += len(chunk)
                                     job.downloaded_bytes = downloaded
@@ -495,15 +414,6 @@ class DownloadManager:
                     while job.user_paused and job.status != JobStatus.CANCELLED:
                         await asyncio.sleep(0.5)
                     continue
-                except ConnectionError:
-                    log.warning("HTTP download interrupted by VPN drop for %s", job.id)
-                    if dest.exists():
-                        dest.unlink()
-                    job.downloaded_bytes = 0
-                    job.progress = 0.0
-                    job.status = JobStatus.PAUSED_VPN
-                    job.touch()
-                    await asyncio.sleep(2)
         except asyncio.CancelledError:
             job.status = JobStatus.CANCELLED
             job.touch()
@@ -612,8 +522,6 @@ class DownloadManager:
                 job.status = JobStatus.PAUSED
                 job.download_rate = 0.0
                 job.upload_rate = 0.0
-            elif self._paused_for_vpn:
-                job.status = JobStatus.PAUSED_VPN
             else:
                 job.status = JobStatus.DOWNLOADING
 
@@ -729,7 +637,6 @@ class DownloadManager:
         if job.status not in {
             JobStatus.QUEUED,
             JobStatus.DOWNLOADING,
-            JobStatus.PAUSED_VPN,
         }:
             return False
 
@@ -755,11 +662,6 @@ class DownloadManager:
             return False
 
         job.user_paused = False
-        if not self.vpn.ok:
-            job.status = JobStatus.PAUSED_VPN
-            job.touch()
-            return True
-
         handle = self._handles.get(job_id)
         if handle is not None:
             try:

@@ -27,7 +27,6 @@ from app.services.encryption import Encryptor
 from app.services.live import LiveHub
 from app.services.ntfy import NtfyNotifier
 from app.services.store import Store
-from app.services.vpn_guard import VpnGuard
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("aestor")
@@ -42,7 +41,6 @@ _PUBLIC_API_PATHS = {
 class AppState:
     settings: Settings
     store: Store
-    vpn: VpnGuard
     manager: DownloadManager
     ntfy: NtfyNotifier
     live: LiveHub
@@ -54,19 +52,16 @@ state = AppState()
 def build_live_snapshot() -> dict[str, Any]:
     settings = state.settings
     store = state.store
-    vpn = state.vpn
     active = sum(
         1
         for j in store.jobs.values()
-        if j.status.value in {"queued", "downloading", "paused", "paused_vpn", "encrypting"}
+        if j.status.value in {"queued", "downloading", "paused", "encrypting"}
     )
     status = StatusResponse(
-        vpn_ok=vpn.ok,
         dev_mode=settings.dev_mode,
         active_jobs=active,
         completed_files=store.completed_count(),
         ntfy_enabled=state.ntfy.enabled,
-        detail=vpn.detail,
     )
     return {
         "type": "snapshot",
@@ -130,19 +125,16 @@ async def lifespan(app: FastAPI):
 
     encryptor = Encryptor(settings.encryption_public_key_path)
     store = Store(settings.completed_dir, encryptor)
-    vpn = VpnGuard(settings)
     ntfy = NtfyNotifier(settings)
     live = LiveHub()
-    manager = DownloadManager(settings, store, vpn, encryptor, ntfy)
+    manager = DownloadManager(settings, store, encryptor, ntfy)
 
     state.settings = settings
     state.store = store
-    state.vpn = vpn
     state.manager = manager
     state.ntfy = ntfy
     state.live = live
 
-    await vpn.start()
     await manager.start()
     await live.start(build_live_snapshot, interval=settings.live_push_interval)
     log.info(
@@ -156,7 +148,6 @@ async def lifespan(app: FastAPI):
     finally:
         await live.stop()
         await manager.stop()
-        await vpn.stop()
         log.info("aestor stopped")
 
 
@@ -177,10 +168,6 @@ def get_manager() -> DownloadManager:
 
 def get_store() -> Store:
     return state.store
-
-
-def get_vpn() -> VpnGuard:
-    return state.vpn
 
 
 def get_ntfy() -> NtfyNotifier:
@@ -247,21 +234,18 @@ async def live_ws(websocket: WebSocket):
 async def status_endpoint(
     _: Annotated[None, Depends(require_web_session)],
     settings: Annotated[Settings, Depends(get_settings)],
-    vpn: Annotated[VpnGuard, Depends(get_vpn)],
     store: Annotated[Store, Depends(get_store)],
 ):
     active = sum(
         1
         for j in store.jobs.values()
-        if j.status.value in {"queued", "downloading", "paused", "paused_vpn", "encrypting"}
+        if j.status.value in {"queued", "downloading", "paused", "encrypting"}
     )
     return StatusResponse(
-        vpn_ok=vpn.ok,
         dev_mode=settings.dev_mode,
         active_jobs=active,
         completed_files=store.completed_count(),
         ntfy_enabled=state.ntfy.enabled,
-        detail=vpn.detail,
     )
 
 

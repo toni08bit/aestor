@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import enum
 from datetime import datetime, timezone
-from typing import Any, Optional
+from typing import Optional
 from uuid import uuid4
 
 from pydantic import BaseModel, Field
@@ -27,7 +27,6 @@ class JobStatus(str, enum.Enum):
     QUEUED = "queued"
     DOWNLOADING = "downloading"
     PAUSED = "paused"
-    PAUSED_VPN = "paused_vpn"
     ENCRYPTING = "encrypting"
     COMPLETED = "completed"
     FAILED = "failed"
@@ -110,9 +109,7 @@ class LoginRequest(BaseModel):
 
 
 class StatusResponse(BaseModel):
-    vpn_ok: bool
     dev_mode: bool
     active_jobs: int
     completed_files: int
     ntfy_enabled: bool = False
-    detail: dict[str, Any] = Field(default_factory=dict)
