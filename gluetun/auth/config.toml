@@ -1,0 +1,9 @@
+# Allow backend (shared netns) to read VPN health without auth.
+# Control server is not published to the host — only reachable inside the stack.
+[[roles]]
+name = "aestor"
+routes = [
+  "GET /v1/vpn/status",
+  "GET /v1/publicip/ip",
+]
+auth = "none"

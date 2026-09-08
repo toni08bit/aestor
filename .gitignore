@@ -5,6 +5,8 @@ data/keys/*.pem
 !data/keys/.gitkeep
 gluetun/*
 !gluetun/.gitkeep
+!gluetun/auth/
+!gluetun/auth/config.toml
 __pycache__/
 *.pyc
 .venv/

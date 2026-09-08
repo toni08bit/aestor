@@ -26,6 +26,7 @@ services:
       - FIREWALL=on
       - FIREWALL_VPN_INPUT_PORTS=8080
       - HTTP_CONTROL_SERVER_ADDRESS=:8001
+      - HTTP_CONTROL_SERVER_AUTH_CONFIG_FILEPATH=/gluetun/auth/config.toml
       - DOT=on
       - BLOCK_MALICIOUS=off
     healthcheck:
