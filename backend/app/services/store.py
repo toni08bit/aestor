@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import time
@@ -24,6 +25,7 @@ log = logging.getLogger(__name__)
 
 MANIFEST_NAME = "manifest.db"
 SPEED_HISTORY_MAX = 90  # ~3 minutes at 2s poll, more at 1s
+META_SUFFIX = ".json"
 
 
 class JobRecord:
@@ -182,19 +184,39 @@ class Store:
     def blob_path(self, file_id: str) -> Path:
         return self.completed_dir / file_id
 
+    def meta_path(self, file_id: str) -> Path:
+        return self.completed_dir / f"{file_id}{META_SUFFIX}"
+
     def has_file(self, file_id: str) -> bool:
         return self.blob_path(file_id).is_file()
 
     def list_file_ids(self) -> list[dict]:
-        """Web-safe listing: uuid + size only (no plaintext names)."""
+        """Web-safe listing: uuid + size + duration (no plaintext names)."""
         rows: list[dict] = []
         for path in sorted(self.completed_dir.iterdir(), key=lambda p: p.stat().st_mtime, reverse=True):
             if not path.is_file() or path.name == MANIFEST_NAME:
                 continue
-            if path.suffix in {".json", ".tmp"}:
+            if path.suffix in {META_SUFFIX, ".tmp"}:
                 continue
-            rows.append({"id": path.name, "encrypted_size_bytes": path.stat().st_size})
+            row: dict = {"id": path.name, "encrypted_size_bytes": path.stat().st_size}
+            duration = self._read_duration(path.name)
+            if duration is not None:
+                row["duration_seconds"] = duration
+            rows.append(row)
         return rows
+
+    def _read_duration(self, file_id: str) -> Optional[float]:
+        meta = self.meta_path(file_id)
+        if not meta.is_file():
+            return None
+        try:
+            data = json.loads(meta.read_text(encoding="utf-8"))
+            value = data.get("duration_seconds")
+            if value is None:
+                return None
+            return float(value)
+        except (OSError, ValueError, TypeError, json.JSONDecodeError):
+            return None
 
     def completed_count(self) -> int:
         return len(self.list_file_ids())
@@ -224,14 +246,22 @@ class Store:
             os.fsync(fh.fileno())
         return dest
 
+    def write_duration(self, file_id: str, duration_seconds: float) -> None:
+        meta = self.meta_path(file_id)
+        meta.write_text(
+            json.dumps({"duration_seconds": float(duration_seconds)}, separators=(",", ":")),
+            encoding="utf-8",
+        )
     def delete_completed(self, file_id: str) -> bool:
         """Unrecoverably delete blob + drop its manifest line."""
         path = self.blob_path(file_id)
-        existed = path.is_file() or self._manifest_has(file_id)
+        meta = self.meta_path(file_id)
+        existed = path.is_file() or meta.is_file() or self._manifest_has(file_id)
         if not existed:
             return False
 
         secure_delete(path)
+        meta.unlink(missing_ok=True)
         self._rewrite_manifest_without(file_id)
         return True
 

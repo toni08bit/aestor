@@ -342,9 +342,13 @@ body {
 
 .panel-head {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
   gap: 1rem;
+}
+
+.panel-head h2 {
+  margin: 0;
 }
 
 .lede.tight {

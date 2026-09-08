@@ -16,7 +16,6 @@ const liveValue = document.getElementById("live-value");
 const liveDot = document.getElementById("live-dot");
 const ntfyTestBtn = document.getElementById("ntfy-test-btn");
 const logoutBtn = document.getElementById("logout-btn");
-const refreshBtn = document.getElementById("refresh-btn");
 const addOpenBtn = document.getElementById("add-open-btn");
 const addCloseBtn = document.getElementById("add-close-btn");
 const addBackdrop = document.getElementById("add-backdrop");
@@ -37,6 +36,7 @@ let pendingDeleteId = null;
 let deleteInFlight = false;
 const expandedJobs = new Set();
 const cardEls = new Map(); // id → root element (preserve expand + canvas across polls)
+const fileEls = new Map(); // id → completed file row
 
 function show(el) {
   el.classList.remove("hidden");
@@ -203,7 +203,8 @@ function formatEta(seconds) {
 }
 
 function formatDuration(seconds) {
-  if (!seconds) return "0s";
+  if (seconds == null || !Number.isFinite(seconds)) return "—";
+  if (seconds <= 0) return "0s";
   return formatEta(seconds);
 }
 
@@ -290,11 +291,6 @@ torrentForm.addEventListener("submit", async (e) => {
   } catch (err) {
     setError(addError, err.message || "Upload failed");
   }
-});
-
-refreshBtn.addEventListener("click", () => {
-  requestLiveRefresh();
-  refreshAll();
 });
 
 function applySnapshot(payload) {
@@ -856,32 +852,65 @@ function patchJobCard(card, job) {
 }
 
 function renderFiles(files) {
-  filesList.innerHTML = "";
-  if (!files.length) {
+  const list = files || [];
+  const seen = new Set(list.map((f) => f.id));
+
+  for (const [id, el] of [...fileEls.entries()]) {
+    if (!seen.has(id)) {
+      el.remove();
+      fileEls.delete(id);
+    }
+  }
+
+  if (!list.length) {
+    filesList.innerHTML = "";
+    fileEls.clear();
     show(filesEmpty);
     return;
   }
   hide(filesEmpty);
 
-  for (const file of files) {
-    const row = document.createElement("div");
-    row.className = "row";
-    row.innerHTML = `
-      <div class="row-main">
-        <div class="row-title"><code>${escapeHtml(file.id)}</code></div>
-        <div class="row-meta">
-          <span>${formatBytes(file.encrypted_size_bytes)}</span>
-          <span>name encrypted in /api/v1/list</span>
+  for (const file of list) {
+    let row = fileEls.get(file.id);
+    if (!row) {
+      row = document.createElement("div");
+      row.className = "row";
+      row.dataset.id = file.id;
+      row.innerHTML = `
+        <div class="row-main">
+          <div class="row-title"><code data-f="id"></code></div>
+          <div class="row-meta">
+            <span data-f="size"></span>
+            <span data-f="duration"></span>
+          </div>
         </div>
-      </div>
-      <div class="row-actions">
-        <span class="pill">encrypted</span>
-        <button type="button" class="btn danger small" data-delete-file="${escapeHtml(file.id)}">Delete</button>
-      </div>
-    `;
-    const delBtn = row.querySelector("[data-delete-file]");
-    delBtn.addEventListener("click", () => openConfirmDelete(file.id));
-    filesList.appendChild(row);
+        <div class="row-actions">
+          <button type="button" class="btn danger small" data-f="delete">Delete</button>
+        </div>
+      `;
+      row.querySelector('[data-f="delete"]').addEventListener("click", () => {
+        openConfirmDelete(row.dataset.id);
+      });
+      fileEls.set(file.id, row);
+    }
+    setTextIfChanged(row.querySelector('[data-f="id"]'), file.id);
+    setTextIfChanged(row.querySelector('[data-f="size"]'), formatBytes(file.encrypted_size_bytes));
+    const durEl = row.querySelector('[data-f="duration"]');
+    if (file.duration_seconds != null) {
+      durEl.hidden = false;
+      setTextIfChanged(durEl, formatDuration(file.duration_seconds));
+    } else {
+      durEl.hidden = true;
+      setTextIfChanged(durEl, "");
+    }
+  }
+
+  const desired = list.map((file) => fileEls.get(file.id)).filter(Boolean);
+  const current = [...filesList.children].filter((el) => el.classList?.contains("row"));
+  const sameOrder =
+    current.length === desired.length && current.every((node, i) => node === desired[i]);
+  if (!sameOrder) {
+    for (const el of desired) filesList.appendChild(el);
   }
 }
 

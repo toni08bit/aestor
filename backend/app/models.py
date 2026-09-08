@@ -98,10 +98,11 @@ class JobInfo(BaseModel):
 
 
 class CompletedIdInfo(BaseModel):
-    """Web UI listing — uuid + size only; names live in the encrypted manifest."""
+    """Web UI listing — uuid + size (+ duration); names live in the encrypted manifest."""
 
     id: str
     encrypted_size_bytes: int
+    duration_seconds: Optional[float] = None
 
 
 class LoginRequest(BaseModel):

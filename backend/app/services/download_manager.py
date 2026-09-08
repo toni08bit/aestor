@@ -14,7 +14,7 @@ from urllib.parse import unquote, urlparse
 import httpx
 
 from app.config import Settings
-from app.models import JobKind, JobStatus, PeerInfo, new_id
+from app.models import JobKind, JobStatus, PeerInfo, new_id, utcnow
 from app.services.encryption import Encryptor
 from app.services.geoip import country_code_for_ip
 from app.services.ntfy import NtfyNotifier
@@ -632,6 +632,9 @@ class DownloadManager:
                 on_progress=on_progress,
             )
         )
+
+        wall = max(0.0, (utcnow() - job.created_at).total_seconds())
+        await asyncio.to_thread(self.store.write_duration, file_id, wall)
 
         job.completed_file_id = file_id
         job.status = JobStatus.COMPLETED
