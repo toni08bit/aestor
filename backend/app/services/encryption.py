@@ -1,10 +1,20 @@
 """Hybrid encryption: RSA-OAEP wraps AES-256-GCM keys.
 
-File blob (completed/{uuid}):
+File blob v1 (legacy, completed/{uuid}):
   magic      : b"AESTOR01" (8 bytes)
-  rsa_len    : u32
+  rsa_len    : u32 BE
   rsa_blob   : RSA-OAEP(aes_key[32] || nonce[12])
-  payload    : AES-256-GCM(file_bytes)
+  payload    : AES-256-GCM(entire file)   # limited to < 2 GiB
+
+File blob v2 (streaming, completed/{uuid}):
+  magic      : b"AESTOR02" (8 bytes)
+  rsa_len    : u32 BE
+  rsa_blob   : RSA-OAEP(aes_key[32] || nonce_base[12])
+  repeated until EOF:
+    ct_len   : u32 BE
+    ct||tag  : AES-256-GCM(chunk i)
+  Per-chunk nonce = nonce_base[:8] || u32be(i)
+  Per-chunk AAD   = magic || u32be(i)
 
 Manifest line ciphertext (base64, one per finished item):
   magic      : b"AESTORL1" (8 bytes)
@@ -25,7 +35,7 @@ import json
 import os
 import struct
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable, Optional
 
 from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives import hashes, serialization
@@ -33,8 +43,27 @@ from cryptography.hazmat.primitives.asymmetric import padding
 from cryptography.hazmat.primitives.asymmetric.rsa import RSAPrivateKey
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
-FILE_MAGIC = b"AESTOR01"
+FILE_MAGIC_V1 = b"AESTOR01"
+FILE_MAGIC_V2 = b"AESTOR02"
+FILE_MAGIC = FILE_MAGIC_V2  # current write format
 LINE_MAGIC = b"AESTORL1"
+
+# Plaintext chunk size for streaming file encryption (well under AESGCM's 2^31-1 cap).
+CHUNK_SIZE = 4 * 1024 * 1024
+
+ProgressCb = Callable[[int, int], None]
+
+
+def _chunk_nonce(nonce_base: bytes, index: int) -> bytes:
+    if len(nonce_base) != 12:
+        raise ValueError("nonce base must be 12 bytes")
+    if index < 0 or index >= 2**32:
+        raise ValueError("chunk index out of range")
+    return nonce_base[:8] + struct.pack(">I", index)
+
+
+def _chunk_aad(magic: bytes, index: int) -> bytes:
+    return magic + struct.pack(">I", index)
 
 
 class Encryptor:
@@ -54,19 +83,51 @@ class Encryptor:
             ),
         )
 
-    def encrypt_file(self, source: Path, destination: Path) -> int:
-        """Encrypt file bytes → destination named by UUID. Returns encrypted size."""
-        aes_key = AESGCM.generate_key(bit_length=256)
-        nonce = os.urandom(12)
-        cipher = AESGCM(aes_key).encrypt(nonce, source.read_bytes(), associated_data=FILE_MAGIC)
-        rsa_blob = self._rsa_wrap(aes_key + nonce)
+    def encrypt_file(
+        self,
+        source: Path,
+        destination: Path,
+        on_progress: Optional[ProgressCb] = None,
+    ) -> int:
+        """Stream-encrypt file → destination. Returns encrypted size.
 
+        Uses AESTOR02 chunked AES-256-GCM so files larger than ~2 GiB work and
+        peak memory stays near CHUNK_SIZE rather than the whole file.
+        """
+        aes_key = AESGCM.generate_key(bit_length=256)
+        nonce_base = os.urandom(12)
+        aesgcm = AESGCM(aes_key)
+        rsa_blob = self._rsa_wrap(aes_key + nonce_base)
+
+        total = source.stat().st_size
+        done = 0
         destination.parent.mkdir(parents=True, exist_ok=True)
-        with destination.open("wb") as out:
-            out.write(FILE_MAGIC)
+
+        with source.open("rb") as inp, destination.open("wb") as out:
+            out.write(FILE_MAGIC_V2)
             out.write(struct.pack(">I", len(rsa_blob)))
             out.write(rsa_blob)
-            out.write(cipher)
+
+            index = 0
+            while True:
+                chunk = inp.read(CHUNK_SIZE)
+                if not chunk:
+                    break
+                ct = aesgcm.encrypt(
+                    _chunk_nonce(nonce_base, index),
+                    chunk,
+                    associated_data=_chunk_aad(FILE_MAGIC_V2, index),
+                )
+                out.write(struct.pack(">I", len(ct)))
+                out.write(ct)
+                done += len(chunk)
+                index += 1
+                if on_progress is not None:
+                    on_progress(done, total)
+
+        if on_progress is not None and total == 0:
+            on_progress(0, 0)
+
         return destination.stat().st_size
 
     def encrypt_manifest_payload(self, payload: dict[str, Any]) -> str:
@@ -99,22 +160,56 @@ def _rsa_unwrap(private_key: RSAPrivateKey, rsa_blob: bytes) -> bytes:
     )
 
 
+def _read_exact(fh, n: int) -> bytes:
+    data = fh.read(n)
+    if len(data) != n:
+        raise ValueError("truncated blob truncated")
+    return data
+
+
 def decrypt_file(private_key_path: Path, source: Path, destination: Path) -> None:
-    """Offline decrypt of a completed/{uuid} blob."""
+    """Offline decrypt of a completed/{uuid} blob (AESTOR01 or AESTOR02)."""
     private_key = _load_private(private_key_path)
-    data = source.read_bytes()
-    if data[:8] != FILE_MAGIC:
+    destination.parent.mkdir(parents=True, exist_ok=True)
+
+    with source.open("rb") as inp, destination.open("wb") as out:
+        magic = _read_exact(inp, 8)
+        (rsa_len,) = struct.unpack(">I", _read_exact(inp, 4))
+        rsa_blob = _read_exact(inp, rsa_len)
+        wrap = _rsa_unwrap(private_key, rsa_blob)
+        if len(wrap) < 44:
+            raise ValueError("bad wrapped key material")
+        aes_key, nonce_base = wrap[:32], wrap[32:44]
+        aesgcm = AESGCM(aes_key)
+
+        if magic == FILE_MAGIC_V2:
+            index = 0
+            while True:
+                len_bytes = inp.read(4)
+                if not len_bytes:
+                    break
+                if len(len_bytes) != 4:
+                    raise ValueError("truncated blob truncated")
+                (ct_len,) = struct.unpack(">I", len_bytes)
+                if ct_len < 16 or ct_len > CHUNK_SIZE + 16:
+                    raise ValueError("invalid chunk length")
+                ct = _read_exact(inp, ct_len)
+                plain = aesgcm.decrypt(
+                    _chunk_nonce(nonce_base, index),
+                    ct,
+                    associated_data=_chunk_aad(FILE_MAGIC_V2, index),
+                )
+                out.write(plain)
+                index += 1
+            return
+
+        if magic == FILE_MAGIC_V1:
+            cipher = inp.read()
+            plain = aesgcm.decrypt(nonce_base, cipher, associated_data=FILE_MAGIC_V1)
+            out.write(plain)
+            return
+
         raise ValueError("bad file magic")
-    offset = 8
-    (rsa_len,) = struct.unpack(">I", data[offset : offset + 4])
-    offset += 4
-    rsa_blob = data[offset : offset + rsa_len]
-    offset += rsa_len
-    cipher = data[offset:]
-    wrap = _rsa_unwrap(private_key, rsa_blob)
-    aes_key, nonce = wrap[:32], wrap[32:44]
-    plain = AESGCM(aes_key).decrypt(nonce, cipher, associated_data=FILE_MAGIC)
-    destination.write_bytes(plain)
 
 
 def decrypt_manifest_line(private_key_path: Path, b64_ciphertext: str) -> dict[str, Any]:

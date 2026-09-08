@@ -81,8 +81,23 @@ class Client:
         return self._request("GET", "/api/v1/list").decode("utf-8")
 
     def download(self, file_id: str, dest: Path) -> None:
-        data = self._request("GET", f"/api/v1/files/{file_id}")
-        dest.write_bytes(data)
+        req = urllib.request.Request(
+            f"{self.base}/api/v1/files/{file_id}",
+            method="GET",
+            headers={"Authorization": f"Bearer {self.token}"},
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=self.timeout) as resp, dest.open(
+                "wb"
+            ) as out:
+                while True:
+                    chunk = resp.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    out.write(chunk)
+        except urllib.error.HTTPError as exc:
+            body = exc.read().decode("utf-8", errors="replace")
+            raise RuntimeError(f"GET /api/v1/files/{file_id} → HTTP {exc.code}: {body}") from exc
 
     def delete(self, file_id: str) -> None:
         self._request("DELETE", f"/api/v1/files/{file_id}")

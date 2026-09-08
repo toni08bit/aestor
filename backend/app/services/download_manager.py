@@ -549,7 +549,9 @@ class DownloadManager:
                 return
 
             job.status = JobStatus.ENCRYPTING
-            job.progress = 1.0
+            job.progress = 0.0
+            job.download_rate = 0.0
+            job.upload_rate = 0.0
             job.touch()
 
             try:
@@ -602,17 +604,32 @@ class DownloadManager:
 
     async def _finalize_path(self, job: JobRecord, path: Path) -> None:
         job.status = JobStatus.ENCRYPTING
-        job.touch()
-
+        job.progress = 0.0
+        job.download_rate = 0.0
+        job.upload_rate = 0.0
         file_id = new_id()
         original_name = path.name if path.is_file() else job.name
         size_bytes = path.stat().st_size if path.is_file() else 0
+        if path.is_file():
+            job.total_bytes = size_bytes
+            job.downloaded_bytes = 0
+        job.touch()
+
+        def on_progress(done: int, total: int) -> None:
+            job.downloaded_bytes = done
+            if total > 0:
+                job.total_bytes = total
+                job.progress = min(1.0, done / total)
+            else:
+                job.progress = 1.0
+            job.touch()
 
         await asyncio.to_thread(
             lambda: self.store.append_completed(
                 file_id=file_id,
                 original_name=original_name,
                 source_path=path,
+                on_progress=on_progress,
             )
         )
 

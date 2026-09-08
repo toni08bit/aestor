@@ -707,14 +707,19 @@ function patchJobCard(card, job) {
       ? `${formatBytes(job.downloaded_bytes)} / ${formatBytes(job.total_bytes)}`
       : formatBytes(job.downloaded_bytes);
 
-  const chips = [
-    chip("↓", formatRate(job.download_rate), "Download speed"),
-    chip("↑", formatRate(job.upload_rate), "Upload speed"),
-    chip("Σ", sizeLabel, "Transferred"),
-    chip("⏱", formatEta(job.eta_seconds), "ETA"),
-  ];
-  if (job.kind !== "http") {
-    chips.push(chip("👥", `${job.num_seeds}s · ${job.num_peers}p`, "Seeds / peers"));
+  let chips;
+  if (job.status === "encrypting") {
+    chips = [chip("Σ", sizeLabel, "Encryption progress")];
+  } else {
+    chips = [
+      chip("↓", formatRate(job.download_rate), "Download speed"),
+      chip("↑", formatRate(job.upload_rate), "Upload speed"),
+      chip("Σ", sizeLabel, "Transferred"),
+      chip("⏱", formatEta(job.eta_seconds), "ETA"),
+    ];
+    if (job.kind !== "http") {
+      chips.push(chip("👥", `${job.num_seeds}s · ${job.num_peers}p`, "Seeds / peers"));
+    }
   }
   const chipsHtml = chips.join("");
   if (card._chipsHtml !== chipsHtml) {

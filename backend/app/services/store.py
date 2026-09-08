@@ -18,7 +18,7 @@ from app.models import (
     new_id,
     utcnow,
 )
-from app.services.encryption import Encryptor
+from app.services.encryption import Encryptor, ProgressCb
 
 log = logging.getLogger(__name__)
 
@@ -205,10 +205,11 @@ class Store:
         file_id: str,
         original_name: str,
         source_path: Path,
+        on_progress: Optional[ProgressCb] = None,
     ) -> Path:
         """Encrypt blob as {uuid}, append encrypted manifest line. Returns blob path."""
         dest = self.blob_path(file_id)
-        self.encryptor.encrypt_file(source_path, dest)
+        self.encryptor.encrypt_file(source_path, dest, on_progress=on_progress)
 
         b64 = self.encryptor.encrypt_manifest_payload(
             {
