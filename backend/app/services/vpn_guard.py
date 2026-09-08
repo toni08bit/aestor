@@ -87,16 +87,16 @@ class VpnGuard:
 
         try:
             async with httpx.AsyncClient(timeout=5.0) as client:
-                # Only trust an explicit "running"/"connected" status.
-                # Do NOT treat a cached public-IP response as proof the tunnel is up.
-                status_resp = await client.get(f"{base}/v1/openvpn/status")
+                # /v1/vpn/status works for WireGuard and OpenVPN.
+                # /v1/openvpn/status reports "stopped" under WireGuard even when up.
+                status_resp = await client.get(f"{base}/v1/vpn/status")
                 if status_resp.status_code == 200:
                     body = status_resp.json()
                     status_val = str(body.get("status", "")).lower()
                     ok = status_val in {"running", "connected"}
-                    detail["openvpn_status"] = body
+                    detail["vpn_status"] = body
                 else:
-                    detail["openvpn_status_http"] = status_resp.status_code
+                    detail["vpn_status_http"] = status_resp.status_code
                     ok = False
 
                 try:
