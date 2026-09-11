@@ -172,10 +172,25 @@ def _read_exact(fh, n: int) -> bytes:
     return data
 
 
-def decrypt_file(private_key_path: Path, source: Path, destination: Path) -> None:
-    """Offline decrypt of a completed/{uuid} blob (AESTOR01 or AESTOR02)."""
+def decrypt_file(
+    private_key_path: Path,
+    source: Path,
+    destination: Path,
+    on_progress: Optional[ProgressCb] = None,
+) -> int:
+    """Offline decrypt of a completed/{uuid} blob (AESTOR01 or AESTOR02).
+
+    Returns plaintext byte count. ``on_progress(done, total)`` reports encrypted
+    bytes consumed vs source size (same shape as encrypt_file).
+    """
     private_key = _load_private(private_key_path)
     destination.parent.mkdir(parents=True, exist_ok=True)
+    total = source.stat().st_size
+    plain_total = 0
+
+    def _report(pos: int) -> None:
+        if on_progress is not None:
+            on_progress(min(pos, total), total)
 
     with source.open("rb") as inp, destination.open("wb") as out:
         magic = _read_exact(inp, 8)
@@ -186,6 +201,7 @@ def decrypt_file(private_key_path: Path, source: Path, destination: Path) -> Non
             raise ValueError("bad wrapped key material")
         aes_key, nonce_base = wrap[:32], wrap[32:44]
         aesgcm = AESGCM(aes_key)
+        _report(inp.tell())
 
         if magic == FILE_MAGIC_V2:
             index = 0
@@ -194,7 +210,7 @@ def decrypt_file(private_key_path: Path, source: Path, destination: Path) -> Non
                 if not len_bytes:
                     break
                 if len(len_bytes) != 4:
-                    raise ValueError("truncated blob truncated")
+                    raise ValueError("ciphertext blob truncated")
                 (ct_len,) = struct.unpack(">I", len_bytes)
                 if ct_len < 16 or ct_len > CHUNK_SIZE + 16:
                     raise ValueError("invalid chunk length")
@@ -205,14 +221,20 @@ def decrypt_file(private_key_path: Path, source: Path, destination: Path) -> Non
                     associated_data=_chunk_aad(FILE_MAGIC_V2, index),
                 )
                 out.write(plain)
+                plain_total += len(plain)
                 index += 1
-            return
+                _report(inp.tell())
+            if on_progress is not None and total == 0:
+                on_progress(0, 0)
+            return plain_total
 
         if magic == FILE_MAGIC_V1:
             cipher = inp.read()
             plain = aesgcm.decrypt(nonce_base, cipher, associated_data=FILE_MAGIC_V1)
             out.write(plain)
-            return
+            plain_total = len(plain)
+            _report(total)
+            return plain_total
 
         raise ValueError("bad file magic")
 
