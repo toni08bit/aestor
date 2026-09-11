@@ -50,7 +50,10 @@ FILE_MAGIC = FILE_MAGIC_V2  # current write format
 LINE_MAGIC = b"AESTORL1"
 
 # Plaintext chunk size for streaming file encryption (well under AESGCM's 2^31-1 cap).
-CHUNK_SIZE = 4 * 1024 * 1024
+# Keep this modest so UI progress updates frequently during encrypt/decrypt.
+CHUNK_SIZE = 512 * 1024
+# Accept legacy 4 MiB chunks written by older builds.
+MAX_CHUNK_SIZE = 4 * 1024 * 1024
 
 ProgressCb = Callable[[int, int], None]
 
@@ -127,8 +130,7 @@ class Encryptor:
                     on_progress(done, total)
                 # Yield so the asyncio LiveHub thread can push WS snapshots during
                 # long encrypts (tight read/encrypt/write otherwise starves it).
-                if index % 2 == 0:
-                    time.sleep(0.001)
+                time.sleep(0)
 
         if on_progress is not None and total == 0:
             on_progress(0, 0)
@@ -212,7 +214,7 @@ def decrypt_file(
                 if len(len_bytes) != 4:
                     raise ValueError("ciphertext blob truncated")
                 (ct_len,) = struct.unpack(">I", len_bytes)
-                if ct_len < 16 or ct_len > CHUNK_SIZE + 16:
+                if ct_len < 16 or ct_len > MAX_CHUNK_SIZE + 16:
                     raise ValueError("invalid chunk length")
                 ct = _read_exact(inp, ct_len)
                 plain = aesgcm.decrypt(

@@ -27,6 +27,17 @@ const confirmCancelBtn = document.getElementById("confirm-cancel-btn");
 const confirmOkBtn = document.getElementById("confirm-ok-btn");
 const confirmFileId = document.getElementById("confirm-file-id");
 const confirmError = document.getElementById("confirm-error");
+const pullPill = document.getElementById("pull-pill");
+const pullEmpty = document.getElementById("pull-empty");
+const pullActive = document.getElementById("pull-active");
+const pullHostname = document.getElementById("pull-hostname");
+const pullClientId = document.getElementById("pull-client-id");
+const pullSeen = document.getElementById("pull-seen");
+const pullPhase = document.getElementById("pull-phase");
+const pullMessage = document.getElementById("pull-message");
+const pullBar = document.getElementById("pull-bar");
+const pullPct = document.getElementById("pull-pct");
+const pullStats = document.getElementById("pull-stats");
 
 let pollTimer = null;
 let socket = null;
@@ -298,6 +309,8 @@ function applySnapshot(payload) {
   if (payload.status) renderStatus(payload.status);
   if (payload.jobs) renderJobs(payload.jobs);
   if (payload.files) renderFiles(payload.files);
+  const pull = payload.pull || (payload.status && payload.status.pull);
+  if (pull) renderPull(pull);
 }
 
 async function refreshAll() {
@@ -853,6 +866,86 @@ function patchJobCard(card, job) {
   const wrap = f("peers-wrap");
   setTextIfChanged(f("peer-count"), `${(job.peers || []).length} connected`);
   syncPeersTable(f("peers-body"), wrap, job.peers || []);
+}
+
+function formatAgo(iso) {
+  if (!iso) return "—";
+  const t = Date.parse(iso);
+  if (!Number.isFinite(t)) return "—";
+  const sec = Math.max(0, Math.round((Date.now() - t) / 1000));
+  if (sec < 5) return "just now";
+  if (sec < 60) return `${sec}s ago`;
+  const m = Math.floor(sec / 60);
+  if (m < 60) return `${m}m ago`;
+  const h = Math.floor(m / 60);
+  return `${h}h ago`;
+}
+
+function pullPhaseClass(phase, online) {
+  if (!online) return "warn";
+  if (phase === "error") return "danger";
+  if (phase === "idle" || phase === "listing") return "";
+  if (["downloading", "decrypting", "deleting"].includes(phase)) return "ok";
+  return "";
+}
+
+function renderPull(pull) {
+  if (!pull || !pull.paired) {
+    pullPill.textContent = "unpaired";
+    pullPill.className = "pill";
+    show(pullEmpty);
+    hide(pullActive);
+    return;
+  }
+
+  hide(pullEmpty);
+  show(pullActive);
+
+  const online = !!pull.online;
+  pullPill.textContent = online ? "online" : "offline";
+  pullPill.className = `pill ${online ? "ok" : "warn"}`;
+
+  setTextIfChanged(pullHostname, pull.hostname || pull.client_id || "pull client");
+  setTextIfChanged(pullClientId, pull.client_id || "");
+  setTextIfChanged(pullSeen, `seen ${formatAgo(pull.last_seen)}`);
+
+  const phase = pull.phase || "idle";
+  pullPhase.textContent = phase;
+  pullPhase.className = `pill ${pullPhaseClass(phase, online)}`;
+  setTextIfChanged(pullMessage, pull.message || "");
+
+  const showBar = ["downloading", "decrypting"].includes(phase) && pull.progress != null;
+  const pctLabel = showBar ? pct(pull.progress) : "—";
+  if (showBar) {
+    if (pullBar.style.width !== pctLabel) pullBar.style.width = pctLabel;
+  } else {
+    pullBar.style.width = "0%";
+  }
+  setTextIfChanged(pullPct, pctLabel);
+
+  const parts = [];
+  if (pull.file_id) parts.push(`<span title="file id"><code>${escapeHtml(pull.file_id)}</code></span>`);
+  if (pull.bytes_total != null) {
+    parts.push(
+      `<span>${escapeHtml(formatBytes(pull.bytes_done || 0))} / ${escapeHtml(formatBytes(pull.bytes_total))}</span>`
+    );
+  } else if (pull.bytes_done != null) {
+    parts.push(`<span>${escapeHtml(formatBytes(pull.bytes_done))}</span>`);
+  }
+  if (pull.rate_bps != null && pull.rate_bps > 0) {
+    parts.push(`<span>${escapeHtml(formatRate(pull.rate_bps))}</span>`);
+  }
+  if (pull.queue_remaining != null) {
+    parts.push(`<span>${pull.queue_remaining} queued</span>`);
+  }
+  if (pull.files_pulled != null) {
+    parts.push(`<span>${pull.files_pulled} pulled</span>`);
+  }
+  const statsHtml = parts.join("");
+  if (pullStats._html !== statsHtml) {
+    pullStats._html = statsHtml;
+    pullStats.innerHTML = statsHtml;
+  }
 }
 
 function renderFiles(files) {

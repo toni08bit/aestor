@@ -389,7 +389,7 @@ class DownloadManager:
                                         job.progress = min(1.0, downloaded / job.total_bytes)
                                     now = time.monotonic()
                                     dt = now - last_t
-                                    if dt >= 0.5:
+                                    if dt >= 0.2:
                                         job.download_rate = (downloaded - last_bytes) / dt
                                         job.payload_download_rate = job.download_rate
                                         job.push_speed(job.download_rate, 0.0)
@@ -596,8 +596,11 @@ class DownloadManager:
                             job.progress = 1.0
                         now = time.monotonic()
                         dt = now - zip_last_t
-                        if dt >= 0.25:
-                            job.download_rate = (done - zip_last_bytes) / dt
+                        if dt >= 0.15:
+                            rate = (done - zip_last_bytes) / dt if dt > 0 else 0.0
+                            job.download_rate = rate
+                            job.payload_download_rate = rate
+                            job.push_speed(rate, 0.0)
                             zip_last_t = now
                             zip_last_bytes = done
                         job.touch()
@@ -636,15 +639,22 @@ class DownloadManager:
         if on_progress is not None:
             on_progress(0, total)
 
+        buf_size = 512 * 1024
         with zipfile.ZipFile(dest, "w", compression=zipfile.ZIP_DEFLATED) as zf:
             for path in files:
                 arcname = path.name if src.is_file() else str(path.relative_to(src))
-                zf.write(path, arcname=arcname)
-                done += path.stat().st_size
-                if on_progress is not None:
-                    on_progress(done, total)
-                # Let the live WS loop breathe during large packs.
-                time.sleep(0)
+                # Stream each file so progress moves during large members instead
+                # of jumping once per file after a long stall.
+                with path.open("rb") as src_fh, zf.open(arcname, "w") as out_fh:
+                    while True:
+                        chunk = src_fh.read(buf_size)
+                        if not chunk:
+                            break
+                        out_fh.write(chunk)
+                        done += len(chunk)
+                        if on_progress is not None:
+                            on_progress(done, total)
+                        time.sleep(0)
 
     async def _finalize_path(self, job: JobRecord, path: Path) -> None:
         job.status = JobStatus.ENCRYPTING
@@ -673,8 +683,11 @@ class DownloadManager:
                 job.progress = 1.0
             now = time.monotonic()
             dt = now - last_t
-            if dt >= 0.25:
-                job.download_rate = (done - last_bytes) / dt
+            if dt >= 0.15:
+                rate = (done - last_bytes) / dt if dt > 0 else 0.0
+                job.download_rate = rate
+                job.payload_download_rate = rate
+                job.push_speed(rate, 0.0)
                 last_t = now
                 last_bytes = done
             job.touch()

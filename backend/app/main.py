@@ -6,7 +6,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Annotated, Any, Optional
 
-from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, Response, UploadFile, WebSocket, status
+from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Request, Response, UploadFile, WebSocket, status
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -22,18 +22,29 @@ from app.auth import (
     verify_session_token,
 )
 from app.config import Settings, get_settings
-from app.models import CompletedIdInfo, JobCreate, JobInfo, LoginRequest, StatusResponse
+from app.models import (
+    CompletedIdInfo,
+    JobCreate,
+    JobInfo,
+    LoginRequest,
+    PairRequest,
+    PullClientInfo,
+    PullStatusUpdate,
+    StatusResponse,
+)
 from app.services.download_manager import DownloadManager
 from app.services.egress import EgressInfo
 from app.services.encryption import Encryptor
 from app.services.live import LiveHub
 from app.services.ntfy import NtfyNotifier
+from app.services.pairing import PairingConflict, PairingService
 from app.services.store import Store
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("aestor")
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
+CLIENT_ID_HEADER = "X-Aestor-Client-Id"
 
 _PUBLIC_API_PATHS = {
     "/api/auth/login",
@@ -47,6 +58,7 @@ class AppState:
     egress: EgressInfo
     ntfy: NtfyNotifier
     live: LiveHub
+    pairing: PairingService
 
 
 state = AppState()
@@ -66,12 +78,14 @@ def build_live_snapshot() -> dict[str, Any]:
         active_jobs=active,
         completed_files=store.completed_count(),
         ntfy_enabled=state.ntfy.enabled,
+        pull=state.pairing.to_info(),
     )
     return {
         "type": "snapshot",
         "status": status.model_dump(mode="json"),
         "jobs": [j.model_dump(mode="json") for j in store.list_jobs()],
         "files": store.list_file_ids(),
+        "pull": status.pull.model_dump(mode="json"),
     }
 
 
@@ -132,6 +146,7 @@ async def lifespan(app: FastAPI):
     egress = EgressInfo()
     ntfy = NtfyNotifier(settings)
     live = LiveHub()
+    pairing = PairingService(settings.completed_dir / "pair.json")
     manager = DownloadManager(settings, store, encryptor, ntfy)
 
     state.settings = settings
@@ -140,6 +155,7 @@ async def lifespan(app: FastAPI):
     state.egress = egress
     state.ntfy = ntfy
     state.live = live
+    state.pairing = pairing
 
     await egress.start()
     await manager.start()
@@ -181,6 +197,17 @@ def get_store() -> Store:
 
 def get_ntfy() -> NtfyNotifier:
     return state.ntfy
+
+
+def get_pairing() -> PairingService:
+    return state.pairing
+
+
+def _require_paired_client(client_id: Optional[str], pairing: PairingService) -> None:
+    try:
+        pairing.require_client(client_id)
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
 
 
 # --- Auth ---
@@ -244,6 +271,7 @@ async def status_endpoint(
     _: Annotated[None, Depends(require_web_session)],
     settings: Annotated[Settings, Depends(get_settings)],
     store: Annotated[Store, Depends(get_store)],
+    pairing: Annotated[PairingService, Depends(get_pairing)],
 ):
     active = sum(
         1
@@ -256,7 +284,16 @@ async def status_endpoint(
         active_jobs=active,
         completed_files=store.completed_count(),
         ntfy_enabled=state.ntfy.enabled,
+        pull=pairing.to_info(),
     )
+
+
+@app.get("/api/pull", response_model=PullClientInfo)
+async def pull_status_web(
+    _: Annotated[None, Depends(require_web_session)],
+    pairing: Annotated[PairingService, Depends(get_pairing)],
+):
+    return pairing.to_info()
 
 
 @app.get("/api/jobs", response_model=list[JobInfo])
@@ -383,15 +420,81 @@ async def ntfy_test(
     return {"ok": True}
 
 
-# --- Outer bearer API: encrypted manifest + pull/delete by uuid ---
+# --- Outer bearer API: pair + pull/delete by uuid ---
+
+
+@app.post("/api/v1/pair", response_model=PullClientInfo)
+async def api_pair(
+    body: PairRequest,
+    _: Annotated[None, Depends(require_api_bearer)],
+    pairing: Annotated[PairingService, Depends(get_pairing)],
+):
+    """Claim exclusive pull ownership. Pass override=true to displace another client."""
+    try:
+        info = pairing.pair(
+            client_id=body.client_id,
+            hostname=body.hostname,
+            override=body.override,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except PairingConflict as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "message": str(exc),
+                "paired": exc.current.model_dump(mode="json"),
+            },
+        ) from exc
+    state.live.mark_dirty()
+    return info
+
+
+@app.get("/api/v1/pair", response_model=PullClientInfo)
+async def api_pair_get(
+    _: Annotated[None, Depends(require_api_bearer)],
+    pairing: Annotated[PairingService, Depends(get_pairing)],
+):
+    return pairing.to_info()
+
+
+@app.post("/api/v1/status", response_model=PullClientInfo)
+async def api_pull_status(
+    body: PullStatusUpdate,
+    _: Annotated[None, Depends(require_api_bearer)],
+    pairing: Annotated[PairingService, Depends(get_pairing)],
+):
+    """Heartbeat + progress from the paired pull client (no plaintext filenames)."""
+    try:
+        info = pairing.update_status(
+            client_id=body.client_id,
+            phase=body.phase,
+            file_id=body.file_id,
+            bytes_done=body.bytes_done,
+            bytes_total=body.bytes_total,
+            progress=body.progress,
+            rate_bps=body.rate_bps,
+            message=body.message,
+            queue_remaining=body.queue_remaining,
+            files_pulled=body.files_pulled,
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    state.live.mark_dirty()
+    return info
 
 
 @app.get("/api/v1/list", response_class=PlainTextResponse)
 async def api_list_manifest(
     _: Annotated[None, Depends(require_api_bearer)],
     store: Annotated[Store, Depends(get_store)],
+    pairing: Annotated[PairingService, Depends(get_pairing)],
+    x_aestor_client_id: Annotated[Optional[str], Header(alias=CLIENT_ID_HEADER)] = None,
 ):
     """Serve the encrypted-lines manifest. Client decrypts each line locally."""
+    _require_paired_client(x_aestor_client_id, pairing)
+    pairing.touch(x_aestor_client_id or "")
+    state.live.mark_dirty()
     if not store.manifest_path.is_file():
         return PlainTextResponse("")
     return PlainTextResponse(
@@ -405,8 +508,12 @@ async def api_download_file(
     file_id: str,
     _: Annotated[None, Depends(require_api_bearer)],
     store: Annotated[Store, Depends(get_store)],
+    pairing: Annotated[PairingService, Depends(get_pairing)],
+    x_aestor_client_id: Annotated[Optional[str], Header(alias=CLIENT_ID_HEADER)] = None,
 ):
     """Pull the encrypted blob stored under this uuid (filename is the uuid)."""
+    _require_paired_client(x_aestor_client_id, pairing)
+    pairing.touch(x_aestor_client_id or "")
     path = store.blob_path(file_id)
     if not path.is_file():
         raise HTTPException(status_code=404, detail="File not found")
@@ -422,8 +529,12 @@ async def api_delete_file(
     file_id: str,
     _: Annotated[None, Depends(require_api_bearer)],
     store: Annotated[Store, Depends(get_store)],
+    pairing: Annotated[PairingService, Depends(get_pairing)],
+    x_aestor_client_id: Annotated[Optional[str], Header(alias=CLIENT_ID_HEADER)] = None,
 ):
     """Unrecoverably delete the encrypted blob and drop its manifest line."""
+    _require_paired_client(x_aestor_client_id, pairing)
+    pairing.touch(x_aestor_client_id or "")
     if not store.delete_completed(file_id):
         raise HTTPException(status_code=404, detail="File not found")
     state.live.mark_dirty()

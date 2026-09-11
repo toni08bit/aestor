@@ -48,6 +48,34 @@
         <p id="jobs-empty" class="empty">No active downloads.</p>
       </section>
 
+      <section class="panel" id="pull-panel">
+        <div class="panel-head">
+          <h2>Pull client</h2>
+          <span id="pull-pill" class="pill">unpaired</span>
+        </div>
+        <div id="pull-body" class="pull-body">
+          <p id="pull-empty" class="empty">No pull client paired.</p>
+          <div id="pull-active" class="pull-active hidden">
+            <div class="pull-identity">
+              <div class="row-title"><span id="pull-hostname"></span></div>
+              <div class="row-meta">
+                <code id="pull-client-id" class="mono"></code>
+                <span id="pull-seen"></span>
+              </div>
+            </div>
+            <div class="pull-phase-row">
+              <span id="pull-phase" class="pill"></span>
+              <span id="pull-message" class="muted"></span>
+            </div>
+            <div class="progress-row pull-progress">
+              <span class="bar"><span id="pull-bar"></span></span>
+              <span class="progress-pct" id="pull-pct">—</span>
+            </div>
+            <div class="pull-stats" id="pull-stats"></div>
+          </div>
+        </div>
+      </section>
+
       <section class="panel">
         <div class="panel-head">
           <h2>Completed</h2>

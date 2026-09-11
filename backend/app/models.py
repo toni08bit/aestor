@@ -109,9 +109,60 @@ class LoginRequest(BaseModel):
     password: str
 
 
+class PullPhase(str, enum.Enum):
+    IDLE = "idle"
+    LISTING = "listing"
+    DOWNLOADING = "downloading"
+    DECRYPTING = "decrypting"
+    DELETING = "deleting"
+    ERROR = "error"
+
+
+class PairRequest(BaseModel):
+    client_id: str = Field(..., min_length=1, max_length=256)
+    hostname: Optional[str] = Field(None, max_length=256)
+    override: bool = False
+
+
+class PullStatusUpdate(BaseModel):
+    """Progress from the paired pull client. Never includes plaintext filenames."""
+
+    client_id: str = Field(..., min_length=1, max_length=256)
+    phase: PullPhase
+    file_id: Optional[str] = Field(None, max_length=64)
+    bytes_done: Optional[int] = Field(None, ge=0)
+    bytes_total: Optional[int] = Field(None, ge=0)
+    progress: Optional[float] = Field(None, ge=0.0, le=1.0)
+    rate_bps: Optional[float] = Field(None, ge=0.0)
+    message: Optional[str] = Field(None, max_length=512)
+    queue_remaining: Optional[int] = Field(None, ge=0)
+    files_pulled: Optional[int] = Field(None, ge=0)
+
+
+class PullClientInfo(BaseModel):
+    """Paired pull client + live progress for the web UI."""
+
+    paired: bool = False
+    client_id: Optional[str] = None
+    hostname: Optional[str] = None
+    paired_at: Optional[datetime] = None
+    last_seen: Optional[datetime] = None
+    online: bool = False
+    phase: Optional[PullPhase] = None
+    file_id: Optional[str] = None
+    bytes_done: Optional[int] = None
+    bytes_total: Optional[int] = None
+    progress: Optional[float] = None
+    rate_bps: Optional[float] = None
+    message: Optional[str] = None
+    queue_remaining: Optional[int] = None
+    files_pulled: Optional[int] = None
+
+
 class StatusResponse(BaseModel):
     dev_mode: bool
     public_ip: Optional[str] = None
     active_jobs: int
     completed_files: int
     ntfy_enabled: bool = False
+    pull: PullClientInfo = Field(default_factory=PullClientInfo)
