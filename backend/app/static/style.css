@@ -21,10 +21,17 @@
   box-sizing: border-box;
 }
 
+html {
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
 html,
 body {
   margin: 0;
   min-height: 100%;
+  max-width: 100%;
+  overflow-x: clip;
   font-family: var(--font);
   color: var(--ink);
   background: var(--bg0);
@@ -102,6 +109,8 @@ body {
 .field input[type="text"],
 .field input[type="password"],
 .field input[type="file"] {
+  width: 100%;
+  max-width: 100%;
   font: inherit;
   color: var(--ink);
   background: var(--bg0);
@@ -109,6 +118,11 @@ body {
   border-radius: 10px;
   padding: 0.75rem 0.9rem;
   outline: none;
+}
+
+.field input[type="file"] {
+  font-size: 0.85rem;
+  padding: 0.55rem 0.65rem;
 }
 
 .field input:focus {
@@ -167,6 +181,10 @@ body {
   border: 1px solid rgba(224, 112, 112, 0.35);
 }
 
+.label-short {
+  display: none;
+}
+
 .error {
   margin: 0;
   color: var(--danger);
@@ -177,6 +195,7 @@ body {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 0.75rem 1rem;
   padding: 1.1rem 1.5rem;
   border-bottom: 1px solid var(--line);
   background: rgba(12, 18, 16, 0.65);
@@ -190,12 +209,18 @@ body {
   display: flex;
   align-items: center;
   gap: 0.75rem;
+  min-width: 0;
+  flex: 1 1 auto;
 }
 
 .top-actions {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
   gap: 0.4rem;
+  flex: 0 1 auto;
+  min-width: 0;
 }
 
 .app-view {
@@ -243,6 +268,8 @@ body {
 .status-value {
   color: var(--ink);
   font-size: 0.78rem;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .status-value.mono {
@@ -323,6 +350,7 @@ body {
   display: flex;
   flex-direction: column;
   gap: 1rem;
+  min-width: 0;
 }
 
 .panel {
@@ -333,6 +361,8 @@ body {
   display: flex;
   flex-direction: column;
   gap: 0.85rem;
+  min-width: 0;
+  overflow: hidden;
 }
 
 .panel-primary {
@@ -344,7 +374,8 @@ body {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 1rem;
+  flex-wrap: wrap;
+  gap: 0.55rem 1rem;
 }
 
 .panel-head h2 {
@@ -417,6 +448,7 @@ body {
 .dialog-actions {
   display: flex;
   justify-content: flex-end;
+  flex-wrap: wrap;
   gap: 0.55rem;
   margin-top: 0.25rem;
 }
@@ -480,6 +512,7 @@ body {
   display: flex;
   flex-direction: column;
   gap: 0.65rem;
+  min-width: 0;
 }
 
 .row {
@@ -505,6 +538,13 @@ body {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.row-title code {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .row-meta {
@@ -573,6 +613,7 @@ body {
   gap: 0.65rem;
   align-items: flex-start;
   width: 100%;
+  min-width: 0;
   margin: 0;
   padding: 0;
   border: none;
@@ -694,6 +735,7 @@ body {
   flex-direction: column;
   gap: 0.3rem;
   padding-top: 0.15rem;
+  min-width: 0;
 }
 
 .peer-ip-inner {
@@ -890,31 +932,181 @@ body {
   color: var(--muted);
 }
 
-@media (max-width: 640px) {
+@media (max-width: 720px) {
+  .top {
+    flex-wrap: wrap;
+    padding: 0.85rem 1rem;
+  }
+
+  .top-actions {
+    width: 100%;
+    justify-content: flex-start;
+  }
+
+  .top-actions .btn {
+    flex: 1 1 auto;
+    text-align: center;
+  }
+
+  .label-full {
+    display: none;
+  }
+
+  .label-short {
+    display: inline;
+  }
+
+  .login-view {
+    padding: 1rem;
+    align-content: center;
+  }
+
+  .login-panel {
+    padding: 1.35rem 1.1rem;
+  }
+
+  .layout {
+    padding: 1rem 0.85rem 1.25rem;
+    gap: 0.85rem;
+  }
+
+  .panel {
+    padding: 0.95rem 0.85rem;
+    border-radius: 12px;
+  }
+
+  .panel h2,
+  .dialog-panel h2 {
+    font-size: 1.2rem;
+  }
+
   .row {
     grid-template-columns: 1fr;
+    padding: 0.75rem 0.8rem;
   }
 
   .row-actions {
     justify-content: flex-start;
+    flex-wrap: wrap;
   }
 
   .job-summary {
     grid-template-columns: 1fr;
+    padding: 0.7rem 0.75rem;
+  }
+
+  .job-title-row {
+    flex-wrap: wrap;
+    row-gap: 0.35rem;
+  }
+
+  .job-title-row .row-title {
+    flex: 1 1 8rem;
+  }
+
+  .job-actions {
+    flex-direction: row;
+    flex-wrap: wrap;
+    width: 100%;
+    padding-top: 0;
+  }
+
+  .job-actions .btn {
+    flex: 1 1 auto;
+  }
+
+  .job-detail {
+    padding: 0.75rem 0.65rem 0.85rem;
+    margin: 0;
   }
 
   .detail-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
+  .graph-head {
+    flex-wrap: wrap;
+    gap: 0.35rem 0.75rem;
+  }
+
+  .peers-table-wrap {
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .peers-table {
+    min-width: 34rem;
+  }
+
   .status-bar {
-    gap: 0.55rem 1rem;
-    padding: 0.7rem 1rem;
+    gap: 0.45rem 0.85rem;
+    padding: 0.65rem 0.85rem;
   }
 
   .status-live {
     margin-left: 0;
     width: 100%;
+  }
+
+  .dialog {
+    padding: 0.65rem;
+    align-items: end;
+  }
+
+  .dialog-panel {
+    width: 100%;
+    max-height: min(92dvh, 720px);
+    padding: 1rem 0.95rem 1.1rem;
+    border-radius: 14px 14px 10px 10px;
+  }
+
+  .dialog-head {
+    gap: 0.65rem;
+  }
+
+  .dialog-actions {
+    width: 100%;
+  }
+
+  .dialog-actions .btn {
+    flex: 1 1 auto;
+  }
+
+  .pull-stats {
+    gap: 0.35rem 0.75rem;
+  }
+
+  .chip {
+    max-width: 100%;
+  }
+
+  .chip-txt {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 11rem;
+  }
+}
+
+@media (max-width: 420px) {
+  .brand {
+    font-size: 1.2rem;
+  }
+
+  .detail-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .progress-pct {
+    min-width: 2.6rem;
+    font-size: 0.68rem;
+  }
+
+  .chip-txt {
+    max-width: 8.5rem;
+  }
+
+  .top-actions .btn.ghost {
+    flex: 0 1 auto;
   }
 }
 
@@ -945,6 +1137,13 @@ body {
   font-size: 0.82rem;
 }
 
+.pull-identity .row-meta code,
+#pull-client-id {
+  overflow-wrap: anywhere;
+  word-break: break-all;
+  max-width: 100%;
+}
+
 .pull-phase-row {
   display: flex;
   flex-wrap: wrap;
@@ -955,6 +1154,8 @@ body {
 .pull-phase-row .muted {
   color: var(--muted);
   font-size: 0.88rem;
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .pull-progress {

@@ -380,6 +380,19 @@ async def resume_job(
     return {"ok": True}
 
 
+@app.post("/api/jobs/{job_id}/retry")
+async def retry_job(
+    job_id: str,
+    _: Annotated[None, Depends(require_web_session)],
+    manager: Annotated[DownloadManager, Depends(get_manager)],
+):
+    ok = await manager.retry(job_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Job not found or not retryable")
+    state.live.mark_dirty()
+    return {"ok": True}
+
+
 @app.get("/api/files", response_model=list[CompletedIdInfo])
 async def list_completed_web(
     _: Annotated[None, Depends(require_web_session)],

@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <title>aestor</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -33,7 +33,10 @@
         <span id="ntfy-pill" class="pill hidden" title="ntfy">ntfy</span>
       </div>
       <div class="top-actions">
-        <button type="button" id="add-open-btn" class="btn primary small">Add download</button>
+        <button type="button" id="add-open-btn" class="btn primary small">
+          <span class="label-full">Add download</span>
+          <span class="label-short" aria-hidden="true">Add</span>
+        </button>
         <button type="button" id="ntfy-test-btn" class="btn ghost small hidden">Test ntfy</button>
         <button type="button" id="logout-btn" class="btn ghost">Log out</button>
       </div>

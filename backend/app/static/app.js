@@ -751,9 +751,10 @@ function syncActionButton(container, key, visible, label, className, onClick) {
 function patchJobCard(card, job) {
   card._job = job;
   const expanded = expandedJobs.has(job.id);
-  const canCancel = ["queued", "downloading", "paused"].includes(job.status);
+  const canCancel = ["queued", "downloading", "paused", "failed"].includes(job.status);
   const canPause = ["queued", "downloading"].includes(job.status);
   const canResume = job.status === "paused";
+  const canRetry = job.status === "failed";
   card.classList.toggle("expanded", expanded);
 
   const f = (name) => card.querySelector(`[data-f="${name}"]`);
@@ -812,14 +813,25 @@ function patchJobCard(card, job) {
     await api(`/api/jobs/${card.dataset.id}/resume`, { method: "POST", body: "{}" });
     requestLiveRefresh();
   });
-  syncActionButton(actions, "cancel", canCancel, "Cancel", "btn danger small", async () => {
-    const id = card.dataset.id;
-    await api(`/api/jobs/${id}`, { method: "DELETE" });
-    expandedJobs.delete(id);
-    cardEls.delete(id);
-    card.remove();
+  syncActionButton(actions, "retry", canRetry, "Retry", "btn secondary small", async () => {
+    await api(`/api/jobs/${card.dataset.id}/retry`, { method: "POST", body: "{}" });
     requestLiveRefresh();
   });
+  syncActionButton(
+    actions,
+    "cancel",
+    canCancel,
+    job.status === "failed" ? "Dismiss" : "Cancel",
+    "btn danger small",
+    async () => {
+      const id = card.dataset.id;
+      await api(`/api/jobs/${id}`, { method: "DELETE" });
+      expandedJobs.delete(id);
+      cardEls.delete(id);
+      card.remove();
+      requestLiveRefresh();
+    }
+  );
 
   const detail = f("detail");
   detail.classList.toggle("hidden", !expanded);

@@ -577,10 +577,14 @@ class DownloadManager:
                 bundle = content_path
                 if content_path.is_dir():
                     zip_path = job.work_dir / f"{Path(content_name).name}.zip"
+                    # Drop a partial archive left by a previous failed pack attempt.
+                    if zip_path.exists():
+                        zip_path.unlink()
                     job.state = "packing"
                     job.progress = 0.0
                     job.downloaded_bytes = 0
                     job.download_rate = 0.0
+                    job.error = None
                     job.touch()
 
                     zip_last_t = time.monotonic()
@@ -640,12 +644,20 @@ class DownloadManager:
             on_progress(0, total)
 
         buf_size = 512 * 1024
-        with zipfile.ZipFile(dest, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        # allowZip64=True (default): needed for members / archives past the
+        # streaming ZIP64 threshold (2 GiB on Py3.13+, 4 GiB on older).
+        with zipfile.ZipFile(dest, "w", compression=zipfile.ZIP_DEFLATED, allowZip64=True) as zf:
             for path in files:
                 arcname = path.name if src.is_file() else str(path.relative_to(src))
-                # Stream each file so progress moves during large members instead
-                # of jumping once per file after a long stall.
-                with path.open("rb") as src_fh, zf.open(arcname, "w") as out_fh:
+                # Declare size up front so zipfile can enable ZIP64 before
+                # streaming; without this, writes >~2GiB raise
+                # "File size too large, try using force_zip64".
+                zinfo = zipfile.ZipInfo.from_file(path, arcname)
+                zinfo.compress_type = zipfile.ZIP_DEFLATED
+                force_zip64 = zinfo.file_size * 1.05 > zipfile.ZIP64_LIMIT
+                with path.open("rb") as src_fh, zf.open(
+                    zinfo, "w", force_zip64=force_zip64
+                ) as out_fh:
                     while True:
                         chunk = src_fh.read(buf_size)
                         if not chunk:
@@ -758,6 +770,147 @@ class DownloadManager:
                 pass
         job.status = JobStatus.DOWNLOADING
         job.touch()
+        return True
+
+    def _torrent_is_finished(self, handle) -> bool:
+        try:
+            status = handle.status()
+        except Exception:
+            return False
+        done = bool(getattr(status, "is_finished", False)) or bool(
+            getattr(status, "is_seeding", False)
+        )
+        if not done and status.progress >= 0.9999 and status.total_wanted > 0:
+            done = status.total_wanted_done >= status.total_wanted
+        return bool(done)
+
+    async def retry(self, job_id: str) -> bool:
+        """Retry a failed job: re-pack/encrypt if download finished, else re-download."""
+        job = self.store.get_job(job_id)
+        if not job or job.status != JobStatus.FAILED:
+            return False
+        if job_id in self._http_tasks:
+            return False
+
+        job.error = None
+        job.user_paused = False
+        job.download_rate = 0.0
+        job.upload_rate = 0.0
+        job.payload_download_rate = 0.0
+        job.payload_upload_rate = 0.0
+        job.touch()
+
+        if job.kind in {JobKind.MAGNET, JobKind.TORRENT}:
+            return await self._retry_torrent(job)
+        if job.kind == JobKind.HTTP:
+            return self._retry_http(job)
+        return False
+
+    async def _retry_torrent(self, job: JobRecord) -> bool:
+        handle = self._handles.get(job.id)
+        if handle is not None:
+            finished = self._torrent_is_finished(handle) or job.state in {
+                "packing",
+                "encrypting",
+            }
+            if finished:
+                # Claim so a second Retry is rejected; pack/encrypt runs async.
+                job.status = JobStatus.DOWNLOADING
+                job.state = None
+                job.touch()
+                asyncio.create_task(
+                    self._complete_torrent(job.id),
+                    name=f"retry-pack-{job.id}",
+                )
+                return True
+            job.status = JobStatus.DOWNLOADING
+            job.state = None
+            job.touch()
+            try:
+                handle.resume()
+            except Exception:
+                pass
+            return True
+
+        self._ensure_can_start()
+        if job.work_dir is None:
+            work = self.settings.download_dir / job.id
+            work.mkdir(parents=True, exist_ok=True)
+            job.work_dir = work
+
+        if job.torrent_path and job.torrent_path.is_file():
+            info = lt.torrent_info(str(job.torrent_path))
+            job.name = info.name() or job.name
+            atp = lt.add_torrent_params()
+            atp.ti = info
+            atp.save_path = str(job.work_dir)
+            handle = self._session.add_torrent(atp)
+            handle.resume()
+            self._handles[job.id] = handle
+            job.status = JobStatus.DOWNLOADING
+            job.state = None
+            job.touch()
+            return True
+
+        if _is_magnet(job.source):
+            try:
+                params = lt.parse_magnet_uri(job.source)
+            except Exception:
+                params = lt.add_torrent_params()
+                params.url = job.source
+            params.save_path = str(job.work_dir)
+            handle = self._session.add_torrent(params)
+            handle.resume()
+            self._handles[job.id] = handle
+            job.status = JobStatus.DOWNLOADING
+            job.state = None
+            job.touch()
+            return True
+
+        if _is_http(job.source):
+            job.status = JobStatus.DOWNLOADING
+            job.state = None
+            job.touch()
+            self._http_tasks[job.id] = asyncio.create_task(
+                self._fetch_torrent_then_add(job, job.source),
+                name=f"torrent-fetch-{job.id}",
+            )
+            return True
+
+        return False
+
+    def _retry_http(self, job: JobRecord) -> bool:
+        if job.work_dir is None:
+            return False
+
+        dest = job.work_dir / job.name
+        # Failed during encryption with the downloaded file still on disk.
+        if job.state == "encrypting" and dest.is_file():
+            job.status = JobStatus.ENCRYPTING
+            job.touch()
+
+            async def _finalize() -> None:
+                try:
+                    await self._finalize_path(job, dest)
+                except Exception as exc:
+                    log.exception("retry finalize http failed for %s", job.id)
+                    self._fail_job(job, str(exc))
+
+            asyncio.create_task(_finalize(), name=f"retry-http-finalize-{job.id}")
+            return True
+
+        if dest.exists():
+            dest.unlink()
+        job.downloaded_bytes = 0
+        job.progress = 0.0
+        job.total_bytes = None
+        job.status = JobStatus.DOWNLOADING
+        job.state = "http"
+        job.touch()
+        self._http_tasks[job.id] = asyncio.create_task(
+            self._http_download(job, job.source),
+            name=f"http-{job.id}",
+        )
         return True
 
     async def cancel(self, job_id: str) -> bool:
