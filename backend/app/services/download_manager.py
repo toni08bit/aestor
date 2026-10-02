@@ -22,6 +22,9 @@ from app.services.store import JobRecord, Store
 
 log = logging.getLogger(__name__)
 
+FASTRESUME_NAME = "fastresume"
+_PERSIST_FLUSH_EVERY = 8  # poll ticks (~4s at 0.5s interval)
+
 try:
     import libtorrent as lt
 except ImportError:  # pragma: no cover
@@ -145,6 +148,8 @@ class DownloadManager:
         self._http_tasks: dict[str, asyncio.Task] = {}
         self._poll_task: Optional[asyncio.Task] = None
         self._lock = asyncio.Lock()
+        self._persist_tick = 0
+        self._stopping = False
 
     def _notify(self, coro) -> None:
         asyncio.create_task(coro)
@@ -153,7 +158,34 @@ class DownloadManager:
         job.status = JobStatus.FAILED
         job.error = error
         job.touch()
+        self.store.persist_job(job)
         self._notify(self.ntfy.failed(name=job.name, error=error))
+
+    def _save_fastresume(self, job: JobRecord, handle) -> None:
+        if job.work_dir is None:
+            return
+        path = job.work_dir / FASTRESUME_NAME
+        try:
+            if not hasattr(handle, "write_resume_data") or not hasattr(lt, "write_resume_data_buf"):
+                return
+            buf = lt.write_resume_data_buf(handle.write_resume_data())
+            tmp = job.work_dir / f".{FASTRESUME_NAME}.tmp"
+            tmp.write_bytes(buf)
+            tmp.replace(path)
+        except Exception:
+            log.debug("fastresume save failed for %s", job.id, exc_info=True)
+
+    def _read_fastresume(self, job: JobRecord):
+        if job.work_dir is None:
+            return None
+        path = job.work_dir / FASTRESUME_NAME
+        if not path.is_file() or not hasattr(lt, "read_resume_data"):
+            return None
+        try:
+            return lt.read_resume_data(path.read_bytes())
+        except Exception:
+            log.debug("fastresume load failed for %s", job.id, exc_info=True)
+            return None
 
     async def start(self) -> None:
         # Debian's libtorrent 2.0 bindings take a settings dict (no settings_pack class).
@@ -186,17 +218,27 @@ class DownloadManager:
         self.settings.download_dir.mkdir(parents=True, exist_ok=True)
         self.settings.completed_dir.mkdir(parents=True, exist_ok=True)
 
+        await self._restore_jobs()
         self._poll_task = asyncio.create_task(self._poll_loop(), name="torrent-poll")
 
     async def stop(self) -> None:
+        self._stopping = True
         if self._poll_task:
             self._poll_task.cancel()
             try:
                 await self._poll_task
             except asyncio.CancelledError:
                 pass
+        for job_id, handle in list(self._handles.items()):
+            job = self.store.get_job(job_id)
+            if job is not None:
+                self._save_fastresume(job, handle)
+                self.store.persist_job(job)
         for task in list(self._http_tasks.values()):
             task.cancel()
+        if self._http_tasks:
+            await asyncio.gather(*self._http_tasks.values(), return_exceptions=True)
+        self.store.flush_dirty_jobs()
         if self._session:
             for handle in list(self._handles.values()):
                 try:
@@ -204,6 +246,159 @@ class DownloadManager:
                 except Exception:
                     pass
             self._session = None
+
+    async def _restore_jobs(self) -> None:
+        jobs = self.store.load_persisted_jobs()
+        if not jobs:
+            return
+        log.info("restoring %d persisted job(s)", len(jobs))
+        for job in jobs:
+            self.store.add_job(job, persist=False)
+            try:
+                await self._restore_one(job)
+            except Exception as exc:
+                log.exception("failed to restore job %s", job.id)
+                self._fail_job(job, f"restore failed: {exc}")
+
+    async def _restore_one(self, job: JobRecord) -> None:
+        if job.kind == JobKind.HTTP:
+            await self._restore_http(job)
+            return
+        if job.kind in {JobKind.MAGNET, JobKind.TORRENT}:
+            await self._restore_torrent(job)
+            return
+        self._fail_job(job, f"unknown job kind {job.kind}")
+
+    async def _restore_http(self, job: JobRecord) -> None:
+        assert job.work_dir is not None
+        dest = job.work_dir / job.name
+
+        if job.status == JobStatus.FAILED:
+            # Keep visible for manual retry; nothing to start.
+            self.store.persist_job(job)
+            return
+
+        if (
+            job.status == JobStatus.ENCRYPTING
+            or job.state in {"encrypting", "packing"}
+        ) and dest.is_file():
+            job.status = JobStatus.ENCRYPTING
+            self.store.persist_job(job)
+
+            async def _finalize() -> None:
+                try:
+                    await self._finalize_path(job, dest)
+                except Exception as exc:
+                    log.exception("restore finalize http failed for %s", job.id)
+                    self._fail_job(job, str(exc))
+
+            asyncio.create_task(_finalize(), name=f"restore-http-finalize-{job.id}")
+            return
+
+        if job.status == JobStatus.PAUSED or job.user_paused:
+            job.user_paused = True
+            job.status = JobStatus.PAUSED
+            self.store.persist_job(job)
+            self._http_tasks[job.id] = asyncio.create_task(
+                self._http_download(job, job.source),
+                name=f"http-{job.id}",
+            )
+            return
+
+        job.status = JobStatus.DOWNLOADING
+        self.store.persist_job(job)
+        self._http_tasks[job.id] = asyncio.create_task(
+            self._http_download(job, job.source),
+            name=f"http-{job.id}",
+        )
+
+    async def _restore_torrent(self, job: JobRecord) -> None:
+        if job.status == JobStatus.FAILED:
+            # Reattach paused so Retry can pack/encrypt without re-fetching.
+            try:
+                self._reattach_torrent(job, paused=True)
+            except Exception:
+                log.debug("could not reattach failed torrent %s", job.id, exc_info=True)
+            self.store.persist_job(job)
+            return
+
+        needs_finalize = job.status == JobStatus.ENCRYPTING or job.state in {
+            "packing",
+            "encrypting",
+        }
+        paused = job.status == JobStatus.PAUSED or job.user_paused or needs_finalize
+        self._reattach_torrent(job, paused=paused)
+
+        if needs_finalize:
+            job.status = JobStatus.DOWNLOADING
+            job.user_paused = False
+            self.store.persist_job(job)
+            asyncio.create_task(
+                self._complete_torrent(job.id),
+                name=f"restore-pack-{job.id}",
+            )
+            return
+
+        if paused:
+            job.user_paused = True
+            job.status = JobStatus.PAUSED
+        else:
+            job.status = JobStatus.DOWNLOADING
+        self.store.persist_job(job)
+
+    def _reattach_torrent(self, job: JobRecord, *, paused: bool) -> None:
+        self._ensure_can_start()
+        if job.work_dir is None:
+            raise RuntimeError("job has no work_dir")
+
+        resume = self._read_fastresume(job)
+        handle = None
+
+        if job.torrent_path and job.torrent_path.is_file():
+            info = lt.torrent_info(str(job.torrent_path))
+            job.name = info.name() or job.name
+            if resume is not None:
+                atp = resume
+                atp.ti = info
+            else:
+                atp = lt.add_torrent_params()
+                atp.ti = info
+            atp.save_path = str(job.work_dir)
+            handle = self._session.add_torrent(atp)
+        elif _is_magnet(job.source):
+            if resume is not None:
+                atp = resume
+            else:
+                try:
+                    atp = lt.parse_magnet_uri(job.source)
+                except Exception:
+                    atp = lt.add_torrent_params()
+                    atp.url = job.source
+            atp.save_path = str(job.work_dir)
+            handle = self._session.add_torrent(atp)
+        elif _is_http(job.source) and job.kind == JobKind.TORRENT:
+            # Remote .torrent fetch was interrupted — restart fetch.
+            job.status = JobStatus.DOWNLOADING
+            self.store.persist_job(job)
+            self._http_tasks[job.id] = asyncio.create_task(
+                self._fetch_torrent_then_add(job, job.source),
+                name=f"torrent-fetch-{job.id}",
+            )
+            return
+        else:
+            raise RuntimeError("cannot restore torrent: no magnet/torrent source")
+
+        if paused:
+            try:
+                handle.pause()
+            except Exception:
+                pass
+        else:
+            try:
+                handle.resume()
+            except Exception:
+                pass
+        self._handles[job.id] = handle
 
     def _ensure_can_start(self) -> None:
         if self._session is None:
@@ -242,6 +437,7 @@ class DownloadManager:
         job.status = JobStatus.DOWNLOADING
         self._handles[job.id] = handle
         job.touch()
+        self.store.persist_job(job)
         return job
 
     def _add_magnet(self, magnet: str, name: Optional[str]) -> JobRecord:
@@ -269,6 +465,7 @@ class DownloadManager:
         job.status = JobStatus.DOWNLOADING
         self._handles[job.id] = handle
         job.touch()
+        self.store.persist_job(job)
         return job
 
     def _add_remote_torrent(self, url: str, name: Optional[str]) -> JobRecord:
@@ -285,6 +482,7 @@ class DownloadManager:
         self.store.add_job(job)
         job.status = JobStatus.DOWNLOADING
         job.touch()
+        self.store.persist_job(job)
         self._http_tasks[job.id] = asyncio.create_task(
             self._fetch_torrent_then_add(job, url),
             name=f"torrent-fetch-{job.id}",
@@ -305,6 +503,7 @@ class DownloadManager:
         self.store.add_job(job)
         job.status = JobStatus.DOWNLOADING
         job.touch()
+        self.store.persist_job(job)
         self._http_tasks[job.id] = asyncio.create_task(
             self._http_download(job, url),
             name=f"http-{job.id}",
@@ -336,9 +535,11 @@ class DownloadManager:
             job.status = JobStatus.DOWNLOADING
             self._handles[job.id] = handle
             job.touch()
+            self.store.persist_job(job)
         except asyncio.CancelledError:
-            job.status = JobStatus.CANCELLED
-            job.touch()
+            if not self._stopping:
+                job.status = JobStatus.CANCELLED
+                job.touch()
             raise
         except Exception as exc:
             log.exception("torrent fetch failed for %s", job.id)
@@ -355,30 +556,65 @@ class DownloadManager:
                     job.status = JobStatus.PAUSED
                     job.download_rate = 0.0
                     job.touch()
+                    self.store.persist_job(job)
                     await asyncio.sleep(0.5)
                     continue
 
                 job.status = JobStatus.DOWNLOADING
                 job.error = None
                 job.touch()
+                self.store.persist_job(job)
 
                 try:
+                    existing = dest.stat().st_size if dest.is_file() else 0
+                    headers: dict[str, str] = {}
+                    if existing > 0:
+                        headers["Range"] = f"bytes={existing}-"
+
                     async with httpx.AsyncClient(follow_redirects=True, timeout=None) as client:
-                        async with client.stream("GET", url) as resp:
-                            resp.raise_for_status()
-                            total = resp.headers.get("content-length")
-                            job.total_bytes = int(total) if total else None
+                        async with client.stream("GET", url, headers=headers) as resp:
+                            # Server ignored Range — restart from scratch.
+                            if existing > 0 and resp.status_code == 200:
+                                existing = 0
+                                dest.unlink(missing_ok=True)
+                            elif existing > 0 and resp.status_code not in {200, 206}:
+                                resp.raise_for_status()
+                            elif existing == 0:
+                                resp.raise_for_status()
+
+                            total_header = resp.headers.get("content-length")
+                            content_range = resp.headers.get("content-range")
+                            if content_range and "/" in content_range:
+                                try:
+                                    job.total_bytes = int(content_range.rsplit("/", 1)[-1])
+                                except ValueError:
+                                    pass
+                            elif total_header:
+                                total = int(total_header)
+                                job.total_bytes = total + existing if resp.status_code == 206 else total
+
                             cd = resp.headers.get("content-disposition")
                             if cd and "filename=" in cd:
                                 part = cd.split("filename=")[-1].strip().strip("\"'")
                                 if part:
-                                    job.name = Path(part).name
-                                    dest = job.work_dir / job.name
+                                    new_name = Path(part).name
+                                    if new_name != job.name:
+                                        new_dest = job.work_dir / new_name
+                                        if dest.exists() and not new_dest.exists():
+                                            dest.rename(new_dest)
+                                        job.name = new_name
+                                        dest = new_dest
+                                        self.store.persist_job(job)
 
-                            downloaded = 0
+                            downloaded = existing
                             last_t = time.monotonic()
-                            last_bytes = 0
-                            with dest.open("wb") as out:
+                            last_bytes = downloaded
+                            mode = "ab" if existing > 0 and resp.status_code == 206 else "wb"
+                            if mode == "wb" and dest.exists():
+                                dest.unlink()
+                                downloaded = 0
+                                last_bytes = 0
+                            with dest.open(mode) as out:
                                 async for chunk in resp.aiter_bytes(1024 * 256):
                                     if job.user_paused:
                                         raise _UserPaused()
@@ -407,16 +643,17 @@ class DownloadManager:
                     job.status = JobStatus.PAUSED
                     job.download_rate = 0.0
                     job.touch()
-                    if dest.exists():
-                        dest.unlink()
-                    job.downloaded_bytes = 0
-                    job.progress = 0.0
+                    self.store.persist_job(job)
+                    # Keep partial file so pause/restart can resume via Range.
                     while job.user_paused and job.status != JobStatus.CANCELLED:
                         await asyncio.sleep(0.5)
                     continue
         except asyncio.CancelledError:
-            job.status = JobStatus.CANCELLED
-            job.touch()
+            # Shutdown cancel — leave persisted status for resume. User cancel
+            # goes through cancel() which removes the job entirely.
+            if not self._stopping:
+                job.status = JobStatus.CANCELLED
+                job.touch()
             raise
         except Exception as exc:
             log.exception("HTTP download failed for %s", job.id)
@@ -430,6 +667,14 @@ class DownloadManager:
                 await self._poll_once()
             except Exception:
                 log.exception("poll error")
+            self._persist_tick += 1
+            if self._persist_tick >= _PERSIST_FLUSH_EVERY:
+                self._persist_tick = 0
+                self.store.flush_dirty_jobs()
+                for job_id, handle in list(self._handles.items()):
+                    job = self.store.get_job(job_id)
+                    if job and job.status == JobStatus.DOWNLOADING:
+                        self._save_fastresume(job, handle)
             await asyncio.sleep(self.settings.torrent_poll_interval)
 
     async def _poll_once(self) -> None:
@@ -553,6 +798,7 @@ class DownloadManager:
             job.download_rate = 0.0
             job.upload_rate = 0.0
             job.touch()
+            self.store.persist_job(job)
 
             try:
                 handle.pause()
@@ -586,6 +832,7 @@ class DownloadManager:
                     job.download_rate = 0.0
                     job.error = None
                     job.touch()
+                    self.store.persist_job(job)
 
                     zip_last_t = time.monotonic()
                     zip_last_bytes = 0
@@ -681,6 +928,7 @@ class DownloadManager:
             job.total_bytes = size_bytes
             job.downloaded_bytes = 0
         job.touch()
+        self.store.persist_job(job)
 
         last_t = time.monotonic()
         last_bytes = 0
@@ -722,6 +970,7 @@ class DownloadManager:
         # Drop plaintext name from job view after encryption
         job.name = file_id
         job.touch()
+        self.store.drop_persisted_job(job)
 
         self._notify(
             self.ntfy.completed(name=original_name, file_id=file_id, size_bytes=size_bytes)
@@ -745,6 +994,7 @@ class DownloadManager:
         job.download_rate = 0.0
         job.upload_rate = 0.0
         job.touch()
+        self.store.persist_job(job)
 
         handle = self._handles.get(job_id)
         if handle is not None:
@@ -752,6 +1002,7 @@ class DownloadManager:
                 handle.pause()
             except Exception:
                 pass
+            self._save_fastresume(job, handle)
         return True
 
     async def resume(self, job_id: str) -> bool:
@@ -770,6 +1021,7 @@ class DownloadManager:
                 pass
         job.status = JobStatus.DOWNLOADING
         job.touch()
+        self.store.persist_job(job)
         return True
 
     def _torrent_is_finished(self, handle) -> bool:

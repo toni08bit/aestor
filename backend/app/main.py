@@ -142,7 +142,7 @@ async def lifespan(app: FastAPI):
     settings.completed_dir.mkdir(parents=True, exist_ok=True)
 
     encryptor = Encryptor(settings.encryption_public_key_path)
-    store = Store(settings.completed_dir, encryptor)
+    store = Store(settings.completed_dir, encryptor, download_dir=settings.download_dir)
     egress = EgressInfo()
     ntfy = NtfyNotifier(settings)
     live = LiveHub()
